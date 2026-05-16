@@ -355,6 +355,29 @@ button:disabled {
   flex-shrink: 0;
 }
 
+/* Agent label pill — color-coded so the multi-agent reasoning chain
+   reads at a glance (main / workspace / research). */
+.step-agent {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  background: #eaeef2;
+  color: #57606a;
+}
+.step-agent-pill--main      { background: #ddebff; color: #0550ae; }
+.step-agent-pill--workspace { background: #dafbe1; color: #1a7f37; }
+.step-agent-pill--research  { background: #fff1d6; color: #9a6700; }
+
+/* Optional left-border tint per agent on the step row itself. */
+.step.step-agent-main      { border-left: 3px solid #54aeff; }
+.step.step-agent-workspace { border-left: 3px solid #4ac26b; }
+.step.step-agent-research  { border-left: 3px solid #d4a72c; }
+
 .step-tool {
   font-size: 12px;
   font-weight: 600;

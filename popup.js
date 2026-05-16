@@ -1,16 +1,11 @@
 // UI controller for the Meeting Intelligence Agent popup.
-// Wires the API key form, query input, and reasoning/brief panels
-// to the agent loop in agent.js.
+// Wires the query input + reasoning/brief panels to the server-side
+// agent service. The agent loop itself lives in mcp-server/agents/ —
+// the extension only POSTs the query and renders the streamed SSE
+// events via agent-client.js's runAgent().
 
 (function () {
   // ---------- DOM refs ----------
-  const apiKeySection = document.getElementById("api-key-section");
-  const gearBtn       = document.getElementById("gear-btn");
-  const gearStatus    = document.getElementById("gear-status");
-  const apiKeyInput   = document.getElementById("api-key");
-  const saveKeyBtn    = document.getElementById("save-key-btn");
-  const keyStatus     = document.getElementById("key-status");
-
   const customQuery = document.getElementById("custom-query");
   const runBtn      = document.getElementById("run-btn");
   const quickBtns   = document.querySelectorAll(".quick-btn");
@@ -35,27 +30,7 @@
   // query + reasoning chain + final brief as markdown.
   let runHistory = null;
 
-  // ---------- Init: load saved key ----------
-  (async function init() {
-    try {
-      const { geminiApiKey } = await chrome.storage.local.get("geminiApiKey");
-      if (geminiApiKey) {
-        apiKeyInput.value = geminiApiKey;
-        showKeyStatus("Key loaded from storage.", "success");
-        setKeyStatusIndicator("saved");
-      } else {
-        setKeyStatusIndicator("unset");
-        // No key on first open — pop the settings so the user sees the field.
-        openSettings();
-      }
-    } catch (err) {
-      showKeyStatus(`Failed to load key: ${err.message}`, "error");
-      setKeyStatusIndicator("error");
-    }
-  })();
-
   // ---------- Event wiring ----------
-  saveKeyBtn.addEventListener("click", onSaveKey);
   runBtn.addEventListener("click", () => onRun(customQuery.value.trim()));
   customQuery.addEventListener("keydown", e => {
     if (e.key === "Enter") onRun(customQuery.value.trim());
@@ -76,50 +51,12 @@
     e.stopPropagation();   // don't also toggle the section
     onCopy();
   });
-  gearBtn.addEventListener("click", e => {
-    e.stopPropagation();
-    toggleSettings();
-  });
-  // Close on click outside the popover or gear button.
-  document.addEventListener("mousedown", e => {
-    if (apiKeySection.classList.contains("hidden")) return;
-    if (apiKeySection.contains(e.target) || gearBtn.contains(e.target)) return;
-    closeSettings();
-  });
-  // Close on Escape when the popover is open.
-  document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && !apiKeySection.classList.contains("hidden")) {
-      closeSettings();
-      gearBtn.focus();
-    }
-  });
 
   // ---------- Handlers ----------
-  async function onSaveKey() {
-    const key = apiKeyInput.value.trim();
-    if (!key) {
-      showKeyStatus("Enter a key first.", "error");
-      return;
-    }
-    try {
-      await setApiKey(key);
-      showKeyStatus("Key saved.", "success");
-      setKeyStatusIndicator("saved");
-      closeSettings();
-    } catch (err) {
-      showKeyStatus(`Save failed: ${err.message}`, "error");
-      setKeyStatusIndicator("error");
-    }
-  }
-
   async function onRun(query) {
     if (running) return;
     if (!query) {
       showError("Enter a query (or click a quick action).");
-      return;
-    }
-    if (!apiKeyInput.value.trim()) {
-      showError("Save your Gemini API key first.");
       return;
     }
 
@@ -134,12 +71,6 @@
     reasoningSection.classList.remove("hidden");
 
     try {
-      // Lazy-load the MCP tool registry on first run so the popup opens
-      // cleanly even when the MCP server is down — the user sees the
-      // failure inline with their query rather than at popup open.
-      if (TOOLS.length === 0) {
-        await fetchToolDefinitions();
-      }
       await runAgent(query, {
         onStep: handleStep,
         onAssistantText: handleAssistantText,
@@ -187,6 +118,7 @@
     header.innerHTML = `
       <span class="step-icon"></span>
       <span class="step-num">Step ${step.stepId}</span>
+      <span class="step-agent"></span>
       <span class="step-tool"></span>
       <span class="step-summary"></span>
       <span class="step-chevron">▾</span>
@@ -204,15 +136,23 @@
   function updateStepNode(node, step) {
     // Always collapse: the status icon (✓ / ❌ / ⏳) plus the summary text
     // give enough at-a-glance signal. The user clicks to drill in.
-    node.className = `step step-status-${step.status} collapsed`;
+    // Agent-status class (step-agent-main/workspace/research) drives the
+    // per-agent border color so the multi-agent flow reads at a glance.
+    const agent = step.agent || "main";
+    node.className = `step step-status-${step.status} step-agent-${agent} collapsed`;
     updateReasoningMeta();
 
     const iconEl    = node.querySelector(".step-icon");
+    const agentEl   = node.querySelector(".step-agent");
     const toolEl    = node.querySelector(".step-tool");
     const summaryEl = node.querySelector(".step-summary");
     const body      = node.querySelector(".step-body");
 
     iconEl.textContent = iconFor(step.status);
+    if (agentEl) {
+      agentEl.textContent = agent;
+      agentEl.className = `step-agent step-agent-pill--${agent}`;
+    }
     toolEl.textContent = `${step.toolName}()`;
     summaryEl.textContent = summaryFor(step);
 
@@ -528,10 +468,10 @@
     return note;
   }
 
-  // Tagged reasoning blocks emitted by the SYSTEM_PROMPT's
-  // "Reasoning transparency rules" section. Each tag = a distinct
-  // reasoning type so the UI can color/icon them differently and the
-  // user can scan the agent's chain of thought at a glance.
+  // Tagged reasoning blocks emitted by each agent's "Reasoning transparency
+  // rules" section (the three system prompts in agent.js). Each tag = a
+  // distinct reasoning type so the UI can color/icon them differently and
+  // the user can scan the agent's chain of thought at a glance.
   const REASONING_TAGS = {
     LOOKUP:     { icon: "🔎", label: "LOOKUP",     cls: "lookup" },
     SYNTHESIS:  { icon: "✍️", label: "SYNTHESIS",  cls: "synthesis" },
@@ -544,10 +484,10 @@
   // (e.g. "... [LOOKUP] ... [PROFILE] ..."). Split on the [TAG] markers
   // and render each block as its own row; untagged prose falls back to
   // the legacy "thought" treatment.
-  function handleAssistantText(text) {
+  function handleAssistantText(text, agent) {
     const blocks = splitTaggedBlocks(text);
     for (const block of blocks) {
-      stepsContainer.appendChild(renderReasoningBlock(block));
+      stepsContainer.appendChild(renderReasoningBlock({ ...block, agent }));
     }
   }
 
@@ -575,12 +515,13 @@
     return blocks;
   }
 
-  function renderReasoningBlock({ tag, content }) {
+  function renderReasoningBlock({ tag, content, agent }) {
     const meta = tag ? REASONING_TAGS[tag] : null;
     const node = document.createElement("div");
-    node.className = meta
-      ? `assistant-text reasoning-block reasoning-block--${meta.cls} collapsed`
-      : "assistant-text collapsed";
+    const classes = ["assistant-text", "collapsed"];
+    if (meta) classes.push("reasoning-block", `reasoning-block--${meta.cls}`);
+    if (agent) classes.push(`assistant-text--agent-${agent}`);
+    node.className = classes.join(" ");
 
     const header = document.createElement("div");
     header.className = "assistant-text-header";
@@ -589,8 +530,12 @@
     const truncated = preview.length > 80 ? preview.slice(0, 80) + "…" : preview;
 
     const iconText = meta ? meta.icon : "💭";
+    const agentPill = agent
+      ? `<span class="step-agent step-agent-pill--${agent}">${agent}</span>`
+      : "";
     header.innerHTML = `
       <span class="assistant-text-icon"></span>
+      ${agentPill}
       ${meta ? `<span class="reasoning-tag">${meta.label}</span>` : ""}
       <span class="assistant-text-preview"></span>
       <span class="step-chevron">▾</span>
@@ -829,34 +774,6 @@
     runBtn.textContent = isRunning ? "Running..." : "Go";
     customQuery.disabled = isRunning;
     for (const btn of quickBtns) btn.disabled = isRunning;
-  }
-
-  function showKeyStatus(message, kind) {
-    keyStatus.textContent = message;
-    keyStatus.className = `hint ${kind || ""}`.trim();
-  }
-
-  function setKeyStatusIndicator(state) {
-    // state ∈ "saved" | "unset" | "error" — drives the gear-button dot color.
-    gearStatus.className = `gear-status ${state}`;
-  }
-
-  function openSettings() {
-    apiKeySection.classList.remove("hidden");
-    gearBtn.classList.add("open");
-    gearBtn.setAttribute("aria-expanded", "true");
-    apiKeyInput.focus();
-  }
-
-  function closeSettings() {
-    apiKeySection.classList.add("hidden");
-    gearBtn.classList.remove("open");
-    gearBtn.setAttribute("aria-expanded", "false");
-  }
-
-  function toggleSettings() {
-    if (apiKeySection.classList.contains("hidden")) openSettings();
-    else closeSettings();
   }
 
   // ---------- Copy full run ----------

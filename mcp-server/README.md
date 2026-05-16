@@ -1,8 +1,8 @@
-# Meeting Intelligence MCP Server (Python rewrite)
+# Meeting Intelligence MCP Server
 
 Local MCP server that exposes the 5 meeting-intelligence tools used by the Chrome extension. Speaks streamable-HTTP MCP on `POST /mcp`.
 
-**Session 5 change:** this server was rewritten from Node.js to **Python 3.12 + Pydantic v2** using the official MCP Python SDK. Dependency and environment management is via **[uv](https://docs.astral.sh/uv/)**. The HTTP contract over `/mcp` is unchanged, so the Chrome extension does not need to change.
+Built on **Python 3.12 + Pydantic v2** using the official MCP Python SDK. Dependency and environment management is via **[uv](https://docs.astral.sh/uv/)**.
 
 ## Run
 
@@ -71,8 +71,6 @@ To pre-authorize everything in one click before triggering the agent: visit `htt
 
 To re-authorize from scratch (different Google account, etc.): delete `~/.meeting-intel-mcp/google-tokens.json` and call the tool again.
 
-> **Migrating from the old Node server?** The token-file format is intentionally compatible (same path, same JSON keys: `access_token`, `refresh_token`, `scope`, `token_type`, `expiry_date`), so existing users do **not** have to re-authorize when switching to the Python version. The Python server reads the file in place.
-
 ## Tools
 
 | Name | Backend | Notes |
@@ -99,7 +97,7 @@ SerpAPI's free tier is 100 searches/month, so the server uses Gemini wherever Ge
 - Email domain in `OWN_COMPANY_DOMAIN` → **0 API calls**, return an "internal teammate" stub.
 - Otherwise → **1 SerpAPI call** (the only reliable source for the LinkedIn URL — Gemini hallucinates URLs) + **1 Gemini call** to synthesize `currentRole` and `background` from the SerpAPI snippets.
 
-**LRU cache** ([cache.py](cache.py)): every external lookup is keyed by `(tool, args)` and cached in-process for the lifetime of the server. The Python version also adds in-flight dedupe — if two concurrent calls for the same key arrive (typical for the agent's parallel attendee lookups), the second one awaits the first's result instead of triggering a duplicate API call. Cap: 50 entries.
+**LRU cache** ([cache.py](cache.py)): every external lookup is keyed by `(tool, args)` and cached in-process for the lifetime of the server. Also does in-flight dedupe — if two concurrent calls for the same key arrive (typical for the agent's parallel attendee lookups), the second one awaits the first's result instead of triggering a duplicate API call. Cap: 50 entries.
 
 ## Files
 
@@ -137,10 +135,6 @@ curl -s -X POST http://localhost:3737/mcp \
 
 ## Why Python + Pydantic v2 + uv?
 
-- **Pydantic v2** is the canonical Python schema-validation library and the natural Python equivalent of the Node version's Zod schemas. Field-level descriptions appear directly in the JSON schema the agent sees over `tools/list`, so the LLM's tool-use guidance lives next to the type definitions instead of in a separate file.
+- **Pydantic v2** is the canonical Python schema-validation library. Field-level descriptions appear directly in the JSON schema the agent sees over `tools/list`, so the LLM's tool-use guidance lives next to the type definitions instead of in a separate file.
 - **uv** replaces pip + venv + pip-tools + (sometimes) pyenv with one fast tool. `uv sync` is reproducible across machines, the lockfile pins exact versions, and there's no `requirements.txt` drift.
 - **MCP Python SDK** (`mcp` package) has first-class support for the streamable-HTTP transport and an ergonomic `FastMCP` API that builds tool schemas from type-annotated functions — no separate schema file to keep in sync.
-
-## Legacy Node files
-
-The original Node implementation (`index.js`, `server.js`, `handlers.js`, `google-auth.js`, `serpapi.js`, `llm.js`, `cache.js`, `package.json`, `package-lock.json`) is still present on disk for diff/review during the migration. Run `git log --oneline mcp-server/` if you need to see what changed. They can be deleted once you've confirmed the Python server works end-to-end.

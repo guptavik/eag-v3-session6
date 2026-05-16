@@ -3,9 +3,8 @@
   "name": "Meeting Intelligence Agent",
   "version": "0.1.0",
   "description": "Agentic AI assistant that prepares you for upcoming meetings.",
-  "permissions": ["storage"],
+  "permissions": [],
   "host_permissions": [
-    "https://generativelanguage.googleapis.com/*",
     "http://localhost:3737/*"
   ],
   "action": {

@@ -31,12 +31,13 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 # Load .env BEFORE importing tools so handlers see the env at import time.
 load_dotenv()
 
 import tools  # noqa: E402
+from agents import registry as agent_registry, runner as agent_runner  # noqa: E402
 from google_auth import generate_auth_url, handle_oauth_callback  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "3737"))
@@ -284,6 +285,68 @@ async def auth_google(request: Request) -> RedirectResponse | HTMLResponse:
     return RedirectResponse(url, status_code=302)
 
 
+_agents_ready = False
+_agents_prepare_lock: Any = None  # asyncio.Lock created lazily to avoid loop-binding issues
+
+
+async def _ensure_agents_ready() -> None:
+    """Lazy initialization of the agent registry. Runs once per process —
+    after all @mcp.tool decorators have registered their tools, so
+    mcp.list_tools() returns the full set."""
+    global _agents_ready, _agents_prepare_lock
+    if _agents_ready:
+        return
+    if _agents_prepare_lock is None:
+        import asyncio
+
+        _agents_prepare_lock = asyncio.Lock()
+    async with _agents_prepare_lock:
+        if _agents_ready:
+            return
+        await agent_registry.prepare(mcp)
+        _agents_ready = True
+
+
+@mcp.custom_route("/agents/run", methods=["POST", "OPTIONS"])
+async def agents_run(request: Request) -> StreamingResponse | JSONResponse:
+    """Run the multi-agent system on a user query and stream the
+    reasoning chain back as Server-Sent Events.
+
+    Request body: {"query": str, "userTimeZone": str | null}
+    Response:     text/event-stream with named events (step,
+                  assistant_text, final_text, done, error).
+    """
+    if request.method == "OPTIONS":
+        return JSONResponse({}, status_code=204)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    query = (body or {}).get("query") or ""
+    if not isinstance(query, str) or not query.strip():
+        return JSONResponse({"error": "Missing 'query' string"}, status_code=400)
+
+    user_tz = (body or {}).get("userTimeZone")
+    if user_tz is not None and not isinstance(user_tz, str):
+        return JSONResponse({"error": "'userTimeZone' must be a string or null"}, status_code=400)
+
+    await _ensure_agents_ready()
+
+    return StreamingResponse(
+        agent_runner.stream_agent_run(query.strip(), user_time_zone=user_tz),
+        media_type="text/event-stream",
+        headers={
+            # Required for SSE through some proxies; also tells nginx not
+            # to buffer the response.
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @mcp.custom_route("/oauth/google/callback", methods=["GET"])
 async def oauth_callback(request: Request) -> HTMLResponse:
     code = request.query_params.get("code")
@@ -340,9 +403,10 @@ def main() -> None:
         expose_headers=["Mcp-Session-Id"],
     )
 
-    print("[mcp] meeting-intelligence MCP server listening", flush=True)
-    print(f"[mcp]   endpoint:  http://localhost:{PORT}/mcp", flush=True)
-    print(f"[mcp]   health:    http://localhost:{PORT}/health", flush=True)
+    print("[mcp] meeting-intelligence service listening", flush=True)
+    print(f"[mcp]   MCP tools:    http://localhost:{PORT}/mcp", flush=True)
+    print(f"[mcp]   Agent runner: http://localhost:{PORT}/agents/run  (SSE)", flush=True)
+    print(f"[mcp]   Health:       http://localhost:{PORT}/health", flush=True)
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
 
 

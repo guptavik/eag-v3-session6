@@ -9,23 +9,11 @@
   <div class="app">
     <header class="app-header">
       <h1>Meeting Intelligence Agent</h1>
-      <button class="gear-btn" id="gear-btn" type="button" aria-label="API key settings" aria-haspopup="true" aria-expanded="false">
-        <span class="gear-icon">⚙</span>
-        <span class="gear-status" id="gear-status" aria-hidden="true"></span>
-      </button>
-      <div id="api-key-section" class="settings-popover hidden" role="dialog" aria-label="Gemini API Key">
-        <h2>Gemini API Key</h2>
-        <div class="row">
-          <input
-            type="password"
-            id="api-key"
-            placeholder="AIza..."
-            autocomplete="off"
-            spellcheck="false">
-          <button id="save-key-btn" type="button">Save</button>
-        </div>
-        <div id="key-status" class="hint"></div>
-      </div>
+      <!--
+        The Gemini API key now lives server-side in mcp-server/.env
+        (GEMINI_API_KEY). The extension is a thin UI client — no key
+        configuration here.
+      -->
     </header>
 
     <section class="query-section">
@@ -76,10 +64,12 @@
     </section>
   </div>
 
-  <script src="mcp-client.js"></script>
-  <script src="tools.js"></script>
-  <script src="api.js"></script>
-  <script src="agent.js"></script>
+  <!--
+    The agent loop now runs server-side in Python (mcp-server/agents/).
+    The extension is a thin UI client: it POSTs the user query to
+    /agents/run and streams reasoning back as SSE events.
+  -->
+  <script src="agent-client.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

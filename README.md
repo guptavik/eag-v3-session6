@@ -1,14 +1,61 @@
-# Meeting Intelligence Agent — Session 5
+# Meeting Intelligence Agent — Session 6
 
-A Chrome extension that prepares you for upcoming meetings by autonomously gathering context — calendar, email, attendee profiles, company info — and synthesizing it into an actionable brief. Built on Google Gemini 2.5 Flash with a custom multi-step agent loop. Tools live in a local MCP server that hits real APIs (Google Calendar, Gmail, SerpAPI, Gemini for synthesis).
-
-> **Session 5 upgrades:**
-> 1. **Structured-reasoning prompt** — the system prompt now satisfies all nine criteria of the **Prompt Evaluation Assistant** rubric: a `Self-check rules` section with three explicit gates (after fetch, after profiling/email, before brief), a `Reasoning transparency rules` section that tags every plan line as `[LOOKUP]` / `[SYNTHESIS]` / `[SCHEDULING]` / `[SEARCH]` / `[PROFILE]`, explicit fallback rules, inline-confidence annotations, and a `⚠️ Missing Context` section in the brief for unrecoverable gaps. The UI ([popup.js](popup.js) `splitTaggedBlocks()`) renders each tagged block as its own colored, collapsible row so the chain-of-thought is visibly structured at runtime. Full evaluator scoring (before / after) and per-criterion mapping live in **[docs/prompt-evaluation.md](docs/prompt-evaluation.md)**.
-> 2. **MCP server rewritten in Python** — the local MCP server in [`mcp-server/`](mcp-server/) was rewritten from Node.js to **Python 3.12 + Pydantic v2 + the official MCP Python SDK**, managed with **[uv](https://docs.astral.sh/uv/)**. Every tool input and output is a Pydantic model; the JSON Schema the agent sees over `tools/list` is generated directly from the type-annotated function signatures. The HTTP contract over `/mcp` is unchanged — the Chrome extension does not need to change.
+> **Session 6 upgrade — multi-agent system, fully Python.** The single-agent JavaScript loop became an **orchestrator + 2 specialist sub-agents** architecture, then the whole agent layer was moved out of the Chrome extension into the Python service. The extension is now a thin UI client that POSTs a query and reads back the reasoning chain via Server-Sent Events; all Gemini calls, memory, and tool dispatch live in `mcp-server/agents/`.
 >
-> 📺 **Demo video:** https://youtu.be/fBIHwz54rvE
+> ```
+>                              ┌─────────┐    ┌───────────┐
+>                              │ Memory  │    │  Tools    │
+>                              │ (main)  │    │ delegate, │
+>                              │         │    │ stats     │
+>                              └────┬────┘    └─────┬─────┘
+>                                   │               │
+>                          ┌────────┴───────────────┴────────┐
+>     User ◄── popup ──►   │      Orchestrator (main)        │   ┐
+>             │ SSE        │  plans → delegates → synthesizes │   │
+>             │            └────────┬────────────────────┬───┘   │  Python:
+>             │                     │                    │       │  mcp-server/
+>             │       ┌─────────────▼──────┐  ┌──────────▼──────┐│  agents/
+>             │       │ Workspace sub-agent│  │ Research sub-ag.││
+>             │       │  Memory + Tools    │  │  Memory + Tools ││
+>             │       │  - getUpcoming…    │  │  - analyzeAtt…  ││
+>             │       │  - searchGmail     │  │  - searchWebInfo││
+>             │       └────────────────────┘  └─────────────────┘┘
+>             │
+>      Chrome extension (popup.html + agent-client.js)
+> ```
+>
+> The orchestrator never calls calendar/email/web tools directly. It calls `delegate({agent, task})`, an in-process synthetic tool that routes to the named sub-agent's `run()`. The sub-agent runs its own short Gemini loop with only its scoped tools, then returns a structured summary the orchestrator folds into the final brief. Memory is per-agent and persists for the lifetime of the server process.
+>
+> Source layout — each agent gets its own folder under `mcp-server/agents/` with `prompt.py` + `tools.py`:
+>
+> ```
+> mcp-server/agents/
+>   memory.py             AgentMemory: bounded {task → summary} history + facts
+>   sub_agent.py          Generic SubAgent class (own LLM loop, own memory)
+>   llm.py                Multi-turn Gemini wrapper + JSON-Schema → Gemini sanitizer
+>   registry.py           Partitions FastMCP's tool list into the per-agent subsets,
+>                         exposes the run() entry point used by the HTTP layer
+>   runner.py             Async generator that streams events as SSE
+>   main/
+>     prompt.py           ORCHESTRATOR_SYSTEM_PROMPT
+>     tools.py            DELEGATE_TOOL schema + MAIN_DIRECT_TOOL_NAMES
+>   workspace/
+>     prompt.py           WORKSPACE_SYSTEM_PROMPT
+>     tools.py            WORKSPACE_TOOL_NAMES = {getUpcomingMeetings, searchGmail}
+>   research/
+>     prompt.py           RESEARCH_SYSTEM_PROMPT
+>     tools.py            RESEARCH_TOOL_NAMES = {analyzeAttendeeBackground, searchWebInfo}
+> ```
+>
+> To add a tool to a sub-agent: edit just `agents/{name}/tools.py`. To re-tune a prompt: edit just `agents/{name}/prompt.py`. The Gemini API key is now a single server-side .env variable (no per-user storage in the extension).
 
-## Prompt qualification (Session 5)
+A Chrome extension that prepares you for upcoming meetings by autonomously gathering context — calendar, email, attendee profiles, company info — and synthesizing it into an actionable brief. Built on Google Gemini 2.5 Flash, organized as a multi-agent system (orchestrator + 2 specialist sub-agents). Tools live in a local **Python 3.12 + Pydantic v2** MCP server that hits real APIs (Google Calendar, Gmail, SerpAPI, Gemini for synthesis).
+
+> **Carried over from Session 5:** structured-reasoning prompt with `[LOOKUP]` / `[SYNTHESIS]` / `[SCHEDULING]` / `[SEARCH]` / `[PROFILE]` tags, three self-check gates, fallback rules, inline-confidence annotations, and a `⚠️ Missing Context` section in the brief for unrecoverable gaps. These rules now live in the orchestrator's system prompt; sub-agents follow tighter scope-specific prompts that defer brief-writing to the orchestrator. The original evaluator scoring is in **[docs/prompt-evaluation.md](docs/prompt-evaluation.md)**.
+>
+> 📺 **Demo video (single-agent baseline):** https://youtu.be/fBIHwz54rvE
+
+## Prompt qualification (carried over from Session 5)
 
 | Evaluator criterion | Session 4 | Session 5 |
 |---|:---:|:---:|
@@ -71,110 +118,102 @@ It plans, calls 3–7 tools (calendar, email, web/LinkedIn, attendee profiles, s
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐    ┌─ External services ────────────────┐
-│ Chrome Extension (MV3)                      │    │                                    │
-│                                             │    │  Gemini API (agent loop)           │
-│  popup.html / popup.js / styles.css ← UI    │    │  Gemini API (server-side reasoning)│
-│         │                                   │    │  Google Calendar API               │
-│  agent.js ← manual agent loop               │    │  Gmail API                         │
-│         │                                   │    │  SerpAPI (Google SERP)             │
-│  api.js  ───── fetch ────────────────────────────→  generativelanguage.googleapis.com │
-│         │                                   │    │                                    │
-│  tools.js (MCP shim)                        │    └────▲───▲───▲───────────────────────┘
-│  mcp-client.js (JSON-RPC over HTTP+SSE)     │         │   │   │
-│         │                                   │         │   │   │
-└─────────┼───────────────────────────────────┘         │   │   │
-          │                                             │   │   │
-          │ HTTP/SSE :3737                              │   │   │
-          │                                             │   │   │
-┌─────────▼───────────────────────────────────┐         │   │   │
-│ Local MCP Server (Python 3.12 + Pydantic v2)│         │   │   │
-│ Managed by uv                                │         │   │   │
-│                                             │         │   │   │
-│  server.py  FastMCP + streamable_http_app   │         │   │   │
-│  tools.py   5 async tool implementations    │ ────────┘   │   │
-│  models.py  Pydantic v2 I/O models          │             │   │
-│   ├ getUpcomingMeetings  ──→ Calendar      ─┼─────────────┘   │
-│   ├ searchGmail          ──→ Gmail         ─┼─────────────────┘
-│   ├ searchWebInfo        ──→ Gemini→SerpAPI │
-│   ├ analyzeAttendeeBackground ─→ SerpAPI+Gemini
-│   └ calculateMeetingStats ─→ pure compute   │
-│                                             │
-│  google_auth.py  OAuth + token persistence  │
-│  serpapi.py / llm.py / cache.py             │
-│                                             │
-│  ~/.meeting-intel-mcp/google-tokens.json    │
-│  mcp-server/.env (API keys, config)         │
-└─────────────────────────────────────────────┘
+┌─ Chrome Extension (MV3) ────────────────────┐    ┌─ External services ─────┐
+│                                             │    │                         │
+│  popup.html / popup.js / styles.css ← UI    │    │  Gemini API (3 agents)  │
+│         │                                   │    │  Google Calendar API    │
+│  agent-client.js                            │    │  Gmail API              │
+│   POST /agents/run + SSE reader             │    │  SerpAPI (Google SERP)  │
+│         │                                   │    │                         │
+└─────────┼───────────────────────────────────┘    └────▲────▲────▲──────────┘
+          │ POST /agents/run :3737                      │    │    │
+          │ stream SSE back                             │    │    │
+          ▼                                             │    │    │
+┌─ Local Python service (mcp-server/) ───────────────┐ │    │    │
+│ Python 3.12 + Pydantic v2, managed by uv           │ │    │    │
+│                                                    │ │    │    │
+│  ┌─ Multi-agent runtime ───────────────────────┐  │ │    │    │
+│  │  agents/runner.py    SSE event emitter      │  │ │    │    │
+│  │  agents/registry.py  partitions tools,      │  │ │    │    │
+│  │                      builds the registry    │  │ │    │    │
+│  │  agents/sub_agent.py SubAgent (LLM loop) ───┼──┼─┘    │    │
+│  │  agents/memory.py    AgentMemory            │  │      │    │
+│  │  agents/llm.py       Gemini multi-turn ─────┼──┘      │    │
+│  │  agents/{main,workspace,research}/          │  │      │    │
+│  │    prompt.py + tools.py                     │  │      │    │
+│  └─────────────────────────────────────────────┘  │      │    │
+│                                                    │      │    │
+│  ┌─ MCP transport (unchanged) ─────────────────┐  │      │    │
+│  │  server.py  FastMCP + Starlette on /mcp     │  │      │    │
+│  │  tools.py   5 async tool implementations    │  │      │    │
+│  │  models.py  Pydantic v2 I/O models          │  │      │    │
+│  │   ├ getUpcomingMeetings  ──→ Calendar ──────┼──┼──────┘    │
+│  │   ├ searchGmail          ──→ Gmail ─────────┼──┼───────────┘
+│  │   ├ searchWebInfo        ──→ Gemini→SerpAPI │  │
+│  │   ├ analyzeAttendeeBackground ─→ SerpAPI+Gemini │
+│  │   └ calculateMeetingStats ─→ pure compute   │  │
+│  │  google_auth.py · serpapi.py · llm.py · cache.py
+│  │                                             │  │
+│  │  Agents call tools via mcp.call_tool() — same
+│  │  validation + handlers as the MCP transport │  │
+│  └─────────────────────────────────────────────┘  │
+│                                                    │
+│  ~/.meeting-intel-mcp/google-tokens.json (OAuth)   │
+│  mcp-server/.env  (GEMINI_API_KEY, SERPAPI_API_KEY, etc.)
+└────────────────────────────────────────────────────┘
 ```
 
-The extension itself is small — the agent loop, the UI, and a thin MCP-client shim. All five tools live in the MCP server, which holds the API keys, OAuth refresh tokens, and any caching. Either side can be swapped: a different LLM provider replaces `api.js`, a different MCP host (Claude Desktop, Cursor, etc.) replaces the extension entirely.
+The extension is a thin client: the popup POSTs the user's query to `/agents/run` and renders the streamed SSE events. All Gemini calls, agent memory, and tool dispatch live in Python. The orchestrator never calls calendar/email/web tools directly — it calls `delegate({agent, task})`, which is resolved in-process by routing the task to the named sub-agent's `run()`. Each sub-agent runs its own short Gemini loop with only its scoped tools and its own `AgentMemory`, then returns a structured summary the orchestrator folds into the final brief.
+
+Either side can still be swapped: the MCP layer (`/mcp` route + `tools.py`) is unchanged from Session 5, so a different MCP host (Claude Desktop, Cursor) can use the same five tools without the agent runtime; conversely, a different UI (CLI, web page) can call `/agents/run` without touching the MCP layer.
 
 ### Agent flow
 
-```
-┌──────────────────────────────────────────┐
-│         CHROME EXTENSION                 │
-│  ┌────────────────────────────────────┐ │
-│  │  popup.js  (UI)                    │ │
-│  └──────────────┬─────────────────────┘ │
-│                 │                        │
-│  ┌──────────────▼─────────────────────┐ │
-│  │  Agent loop (agent.js)             │ │
-│  │  - conversation history            │ │
-│  │  - 10-iteration cap                │ │
-│  │  - retry once on tool error        │ │
-│  └──────────────┬─────────────────────┘ │
-│                 │                        │
-│  ┌──────────────▼─────────────────────┐ │     ┌─────────────────────┐
-│  │  api.js → Gemini 2.5 Flash         │ ───→ │  Decides tool calls │
-│  └──────────────┬─────────────────────┘     │  Writes final brief │
-│                 │                            └─────────────────────┘
-│  ┌──────────────▼─────────────────────┐
-│  │  tools.js (MCP shim)               │
-│  │  mcp-client.js                     │
-│  └──────────────┬─────────────────────┘
-└─────────────────┼────────────────────────
-                  │ POST /mcp (JSON-RPC)
-                  ▼
-        ┌─────────────────────┐
-        │  MCP server         │ ──→ Real APIs (Calendar / Gmail / SerpAPI / Gemini)
-        │  (5 tools)          │
-        └─────────────────────┘
-```
-
-### Multi-step reasoning flow
-
-Worked example for *"Prepare me for my next meeting"* — typically 3 LLM turns with a batch of parallel tool calls in the middle.
+Worked example for *"Prepare me for my next meeting"*. The orchestrator now does two delegation rounds and one synthesis pass — typically 3 orchestrator turns, with each delegation triggering 1–3 sub-agent turns under the hood.
 
 ```
-Turn 1 → tool_use: getUpcomingMeetings({hoursAhead: 24})
-         server fetches from Google Calendar (OAuth)
+EXTENSION    → POST /agents/run {query: "Prepare me for my next meeting", userTimeZone: "America/Chicago"}
+                ▼
+SSE stream begins. Each event ← single line of work; extension renders it live.
 
-Turn 2 → tool_use blocks (parallel):
-           analyzeAttendeeBackground("john@acme.com")
-           analyzeAttendeeBackground("jane@acme.com")
-           searchWebInfo("Acme Corp", type: "company")
-           searchGmail("Acme")
-         server runs:
-           attendee #1: SerpAPI + Gemini synthesis
-           attendee #2: SerpAPI + Gemini synthesis
-           web info:    Gemini-first, SerpAPI fallback (no freshness keyword)
-           gmail:       Gmail API search
-         all 4 results returned as one user turn
+ORCHESTRATOR turn 1 → tool_use: delegate({agent: "workspace",
+                                          task: "fetch upcoming meetings, next 24h"})
+    │   emits step(workspace, getUpcomingMeetings, loading) … success
+    └─► WORKSPACE sub-agent
+          turn 1: getUpcomingMeetings({hoursAhead: 24})
+                  ── in-process mcp.call_tool ──→ tools.py ──→ Google Calendar
+          turn 2: end_turn — returns structured summary
+                  ("Found 1 meeting: Acme Q4 Sync, Tue 2pm, attendees …")
 
-Turn 3 → end_turn: final markdown brief
-         (popup.js renders attendees, talking points, prep checklist)
+ORCHESTRATOR turn 2 → tool_use blocks (sequential within one turn):
+    │   delegate({agent: "workspace", task: "search email for 'Acme'"})
+    │   delegate({agent: "research",  task: "profile attendees X,Y + Acme Corp"})
+    │
+    ├─► WORKSPACE sub-agent
+    │     turn 1: searchGmail({query: "Acme"}) ── in-process ──→ Gmail
+    │     turn 2: end_turn — returns 3 hit summary
+    │
+    └─► RESEARCH sub-agent
+          turn 1: parallel analyzeAttendeeBackground × 2 + searchWebInfo
+                  ── in-process ──→ SerpAPI + Gemini
+          turn 2: end_turn — returns profile + company summary
+
+ORCHESTRATOR turn 3 → end_turn: final markdown brief
+                       SSE emits: final_text → done
+                       popup.js renders attendees, talking points, prep checklist
 ```
 
 ### Key architecture points
 
-1. **Conversation history is stateless** — every Gemini call includes the full prior history + tool results.
-2. **Parallel tool calls** — a single LLM turn can request multiple tools; the harness executes them sequentially (deterministic ordering for the UI), then sends all results back in one user turn.
-3. **Iterative refinement** — agent continues until Gemini stops emitting tool_use blocks. 10-iteration safety cap.
-4. **Per-step retry** — failed tool calls retry once silently; persistent failures land in the conversation as `is_error: true` so the model can adapt (try a different query, skip the step, note the gap).
-5. **Visible reasoning** — every tool call streams to the UI as a collapsible row with status icon, inputs, and result.
-6. **Tools live behind MCP**, not in the extension. The extension is a generic agent host; another MCP-aware client (Claude Desktop, etc.) could use the same server unchanged.
+1. **Three agents, one Python service.** Orchestrator (`agents/main/`) + workspace (`agents/workspace/`) + research (`agents/research/`), all built on the same `SubAgent` base class in `agents/sub_agent.py`. Each agent owns its own system prompt, its own Gemini loop, and its own `AgentMemory`. The orchestrator's `delegate` tool is the only data-acquisition path it has — it cannot call MCP tools directly.
+2. **Memory is per-agent and survives across requests in the same server process.** Each sub-agent's recent `(task → summary)` history is prepended to its next user message, so a follow-up question reuses prior context without re-fetching. Capped at 5 entries per agent; cleared on server restart.
+3. **Streaming via SSE.** The extension POSTs once and reads named events as they land: `step`, `assistant_text`, `final_text`, `done`, `error`. No polling, no WebSockets.
+4. **Conversation history is stateless inside each agent's loop** — every Gemini call includes the full prior turns + tool results. The orchestrator only ever sees the sub-agent's *final summary*, not the sub-agent's interior dialogue, which keeps its context window small.
+5. **Iterative refinement** — each agent continues until Gemini stops emitting tool_use blocks. Orchestrator cap: 10 iterations; sub-agent cap: 6.
+6. **Per-step retry** — failed tool calls retry once silently; persistent failures land in the conversation as `is_error: true` so the agent can adapt.
+7. **In-process tool execution.** Sub-agents resolve tool calls by invoking `mcp.call_tool()` directly — same Pydantic validation, same handlers as the MCP wire transport, no HTTP hop. The user's timezone is propagated via a `contextvars.ContextVar` set at the start of each `/agents/run` request.
+8. **Visible reasoning, agent-tagged.** Every tool call (from any agent) streams as a separate `step` event. Each row in the UI carries a colored pill — `main` / `workspace` / `research` — and a matching left-border accent so the user can see at a glance which agent did which work.
+9. **MCP transport is unchanged.** `/mcp` still speaks streamable-HTTP MCP; another MCP-aware client (Claude Desktop, Cursor) could use the same five tools without any agent runtime.
 
 ## Tools
 
@@ -200,48 +239,48 @@ SerpAPI's free tier is 100 searches/month, so the server uses Gemini wherever Ge
 - Email domain in `OWN_COMPANY_DOMAIN` → **0 API calls**, return an "internal teammate" stub.
 - Otherwise → **1 SerpAPI call** (the only reliable source for the LinkedIn URL — Gemini hallucinates URLs) + **1 Gemini call** to synthesize `currentRole` and `background` from the SerpAPI snippets.
 
-A process-local LRU (`mcp-server/cache.js`, 50 entries) dedupes repeat lookups within a popup session.
+A process-local LRU (`mcp-server/cache.py`, 50 entries) with in-flight dedupe handles repeat lookups within a popup session.
 
-## Agent loop
+## Agent loop (each agent)
+
+Every agent — orchestrator and both sub-agents — runs the same generic loop, implemented once in [mcp-server/agents/sub_agent.py](mcp-server/agents/sub_agent.py) and instantiated three times with different system prompts and tool subsets.
 
 ```
-user query
+SubAgent.run(task, emit, user_time_zone)
     │
     ▼
-detect user TZ (Intl.DateTimeFormat)
+prepend memory.serialize() to task
     │
     ▼
-loop (max 10 iterations):
-    callLLM(history, tools, {userTimeZone})
+loop (max iterations per agent):
+    call_llm(history, this.tools, system_prompt, user_time_zone)
        │
        ▼
-    if stop_reason != "tool_use": return final text
+    if stop_reason != "tool_use": return final text  → memory.record_call()
     for each tool_use block (sequential):
-        forward to MCP server (tools/call)
+        if tool_handlers[name] (orchestrator's "delegate") → in-process
+        else → mcp.call_tool(name, args) — Pydantic validates + tools.py executes
         retry once on error
         push tool_result (is_error: true on persistent failure)
+        await emit({kind: "step", ...})    → flows out as SSE
     push assistant turn + tool_results into history
 ```
 
-- **Cap of 10 iterations** prevents runaway loops.
-- **Multiple `tool_use` blocks** in one assistant turn execute **sequentially** so the reasoning-chain UI orders them deterministically.
-- **Tool failures** retry once silently; persistent failures surface as `is_error: true` tool results so the model can adapt.
-- **User timezone** is detected once per run via `Intl.DateTimeFormat()` and threaded into both the system prompt (brief renders meeting times in the user's local zone with abbreviation, e.g. `2:00 PM CST`) and every MCP tool call (so `calculateMeetingStats` attributes meetings to the correct local day, not the server's timezone).
-- **Conversation history** is popup-scoped — closing the popup clears it.
+- **Caps:** orchestrator = 10 iterations, sub-agents = 6. Sub-agents are scoped so they finish in 1–3 turns.
+- **Multiple `tool_use` blocks** in one assistant turn execute **sequentially** so the reasoning-chain UI orders them deterministically. Multiple `delegate` calls in one orchestrator turn fan out to sub-agents the same way.
+- **Tool failures** retry once silently; persistent failures surface as `is_error: true` tool results so the agent can adapt.
+- **User timezone** is detected in the browser via `Intl.DateTimeFormat()`, posted in the `/agents/run` body, and scoped for the request via a `contextvars.ContextVar` so every `mcp.call_tool()` auto-injects it just like the old MCP client did on the wire.
+- **Memory is per-agent and process-scoped.** Each `SubAgent` instance lives at module scope in [agents/registry.py](mcp-server/agents/registry.py), so its `AgentMemory` (capped at 5 prior `(task → summary)` entries) survives across `/agents/run` requests within the same server process.
 
-## System prompt
+## System prompts (three of them)
 
-The system prompt (`api.js` → `SYSTEM_PROMPT`) was rewritten in Session 5 to satisfy the **Prompt Evaluation Assistant** rubric. It is organized into four sections:
+The single SYSTEM_PROMPT from Session 5 was split into three scoped prompts, one per agent folder:
 
-1. **`Operating rules`** — when to fetch the calendar, when to batch tool calls in parallel, when to prefer `endOfToday` vs `hoursAhead`, when to use `calculateMeetingStats` directly with `hoursAhead` instead of round-tripping a `meetings` array, and how to format meeting-load stats.
-2. **`Self-check rules`** — three gates the model must run at three points in the loop:
-   - *After fetching meetings:* if no relevant meeting matched the request, stop and tell the user — do not proceed to attendee profiling or web search.
-   - *After profiling / searching email:* verify returned data is non-empty and on-topic; note gaps explicitly rather than silently skipping.
-   - *Before writing the brief:* confirm title, time, and ≥1 attendee or agenda item exist; otherwise flag the gaps under a `⚠️ Missing Context` section.
-3. **`Reasoning transparency rules`** — every plan line must tag the reasoning type as `[LOOKUP]` / `[SYNTHESIS]` / `[SCHEDULING]` / `[SEARCH]` / `[PROFILE]`. Sections built on incomplete data must annotate confidence inline, e.g. *"(web search returned no recent news — company context may be outdated)"*.
-4. **`Final response format`** — the markdown brief schema (hero meta, Attendees, Company Context, Related Emails, Talking Points, Prep Checklist), plus multi-meeting rules (separate `# Title` per meeting).
+1. **[`ORCHESTRATOR_SYSTEM_PROMPT`](mcp-server/agents/main/prompt.py)** — drives the main agent. Lists the two sub-agents and the one direct tool (`calculateMeetingStats`), describes when to delegate vs. compute, carries forward the Session 5 self-check gates and reasoning-transparency tags, and owns the final brief format (hero meta, Attendees, Company Context, Related Emails, Talking Points, Prep Checklist).
+2. **[`WORKSPACE_SYSTEM_PROMPT`](mcp-server/agents/workspace/prompt.py)** — drives the workspace sub-agent. Scoped to Google Workspace tools only (`getUpcomingMeetings`, `searchGmail`). Tells the model to stay in its lane, return a compact structured summary (not a brief), and use parallel calls when independent. Knows `endOfToday: true` vs `hoursAhead` for "today" queries.
+3. **[`RESEARCH_SYSTEM_PROMPT`](mcp-server/agents/research/prompt.py)** — drives the research sub-agent. Scoped to external research tools only (`analyzeAttendeeBackground`, `searchWebInfo`). Tells the model to parallelize independent lookups, skip internal-domain attendees with a stub, and surface "no result" gaps rather than fabricate.
 
-Per-call: the prompt appends the user's local timezone with explicit guidance to render meeting times in that zone (e.g. `2:00 PM CST`).
+All three share the four-section structure from Session 5: Operating rules, Self-check rules, Reasoning transparency rules, Final response format — but each is scoped to that agent's specific job. Per-call, every prompt has the user's local timezone appended so meeting times render in the user's zone (e.g. `2:00 PM CST`).
 
 The full evaluator output (before / after) and per-criterion mapping is in **[docs/prompt-evaluation.md](docs/prompt-evaluation.md)**.
 
@@ -259,7 +298,7 @@ The agent's plan lines now embed `[TAG]` markers. [popup.js](popup.js) `splitTag
 
 ## UI
 
-- **Gear popover** for the API key — saved to `chrome.storage.local`. Status dot: red = unset, green = saved.
+- **No API-key configuration.** The Gemini key now lives server-side in `mcp-server/.env`; the popup no longer prompts for it.
 - **Quick action buttons** plus a custom query input.
 - **Reasoning chain** — every tool call rendered as a collapsible row with status icon (loading, retrying, success, error). The whole chain is also collapsible. Reasoning prose between tool calls is rendered as a collapsed "thought" with a one-line preview.
 - **Brief renderer** — the model's markdown output is post-processed into structured blocks:
@@ -273,9 +312,9 @@ The agent's plan lines now embed `[TAG]` markers. [popup.js](popup.js) `splitTag
 
 ## Setup
 
-### 1. Install MCP server
+### 1. Install the Python service (MCP + agents)
 
-The server is **Python 3.12 + Pydantic v2** managed by **[uv](https://docs.astral.sh/uv/)**.
+The service is **Python 3.12 + Pydantic v2** managed by **[uv](https://docs.astral.sh/uv/)**. It hosts both the MCP tool transport (`/mcp`) and the multi-agent runtime (`/agents/run`).
 
 ```sh
 # install uv once if you don't have it (macOS/Linux):
@@ -286,66 +325,84 @@ The server is **Python 3.12 + Pydantic v2** managed by **[uv](https://docs.astra
 cd mcp-server
 uv sync                     # creates .venv/ and installs deps from pyproject.toml
 cp .env.example .env
-# fill in SERPAPI_API_KEY, GEMINI_API_KEY (or GOOGLE_API_KEY),
-# GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OWN_COMPANY_DOMAIN
+# fill in GEMINI_API_KEY (or GOOGLE_API_KEY)  ← required by the agents
+#         SERPAPI_API_KEY                      ← required by searchWebInfo / attendee profiles
+#         GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET  ← required by Calendar / Gmail
+#         OWN_COMPANY_DOMAIN                   ← optional, marks internal attendees
 uv run python server.py
 ```
 
-See [mcp-server/README.md](mcp-server/README.md) for full credential walkthrough (SerpAPI signup, Google Cloud OAuth client, etc.).
+See [mcp-server/README.md](mcp-server/README.md) for the full credential walkthrough (SerpAPI signup, Google Cloud OAuth client, etc.).
 
-The server listens on `http://localhost:3737/mcp`. Health check: `curl http://localhost:3737/health`.
+Endpoints:
+- `http://localhost:3737/mcp` — MCP tool transport (streamable HTTP)
+- `http://localhost:3737/agents/run` — multi-agent runtime, returns SSE
+- `http://localhost:3737/health` — JSON health check
 
-### 2. Install Chrome extension
+### 2. Install the Chrome extension
 
-1. Get a Gemini API key from [aistudio.google.com](https://aistudio.google.com) (free tier covers this use).
-2. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, select the project root.
-3. Click the extension icon in the toolbar.
-4. Click the gear in the top-right of the popup.
-5. Paste your Gemini API key (`AIza...`), click **Save**.
-6. Click any quick-action button or type a custom query.
+1. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, select the project root.
+2. Click the extension icon in the toolbar.
+3. Click any quick-action button or type a custom query.
 
-The first time `getUpcomingMeetings` or `searchGmail` is called, the MCP server auto-opens a Google consent page in your browser. Authorize once → the refresh token persists at `~/.meeting-intel-mcp/google-tokens.json` → subsequent calls are silent.
+No API-key configuration is needed in the popup — Gemini is called server-side, with `GEMINI_API_KEY` read from `mcp-server/.env`.
+
+The first time `getUpcomingMeetings` or `searchGmail` runs, the Python server auto-opens a Google consent page in your browser. Authorize once → the refresh token persists at `~/.meeting-intel-mcp/google-tokens.json` → subsequent calls are silent.
 
 ## File structure
 
 ```
-eag-v3-session5/
-├── manifest.json             # MV3 config (host_permissions: Gemini API + localhost:3737)
-├── popup.html                # UI layout
+eag-v3-session6/
+├── manifest.json             # MV3 config (host_permissions: localhost:3737 only)
+├── popup.html                # UI layout — loads agent-client.js + popup.js
 ├── popup.js                  # UI controller, brief post-processor, markdown renderer,
-│                             # splitTaggedBlocks() for [LOOKUP]/[SCHEDULING]/[PROFILE] rendering
-├── styles.css                # All styles, incl. .reasoning-block--{plan,lookup,…} tints
-├── agent.js                  # Agent loop (callLLM → handle tool_use → retry → loop)
-├── api.js                    # Gemini wrapper + the structured-reasoning SYSTEM_PROMPT
-├── tools.js                  # Thin MCP-client shim (replaces in-extension tool impls)
-├── mcp-client.js             # JSON-RPC over HTTP+SSE client
+│                             # splitTaggedBlocks() + per-agent step pill rendering
+├── styles.css                # All styles, incl. per-agent (main/workspace/research)
+│                             # pill + left-border accents and reasoning-block tints
+├── agent-client.js           # POST /agents/run + SSE reader; calls UI callbacks
 ├── mockData.js               # Legacy mock fixtures (no longer wired into popup.html)
 ├── icons/                    # Extension icons
 ├── docs/
-│   └── prompt-evaluation.md  # Prompt Evaluation Assistant scoring (before / after)
+│   └── prompt-evaluation.md  # Prompt Evaluation Assistant scoring (Session 5)
 ├── README.md                 # This file
 ├── specification.md          # Original spec
 └── mcp-server/               # Python 3.12 + Pydantic v2, managed by uv
     ├── pyproject.toml        # uv-managed dependency manifest
     ├── .python-version       # pinned to 3.12
-    ├── server.py             # FastMCP + Starlette transport on /mcp; OAuth + /health routes
-    ├── tools.py              # 5 async tool implementations
-    ├── models.py             # Pydantic v2 I/O models (inputs + outputs)
+    ├── server.py             # FastMCP + Starlette: /mcp · /agents/run · /health · OAuth
+    ├── tools.py              # 5 async MCP tool implementations
+    ├── models.py             # Pydantic v2 I/O models
     ├── google_auth.py        # OAuth client + ~/.meeting-intel-mcp/ token persistence
     ├── serpapi.py            # async SerpAPI client (httpx)
-    ├── llm.py                # async Gemini wrapper for server-side JSON-mode calls
+    ├── llm.py                # JSON-mode Gemini wrapper (server-side reasoning)
     ├── cache.py              # process-local LRU with in-flight dedupe
-    ├── .env.example          # Required env-var template (unchanged from Node version)
-    └── README.md             # Server-specific setup walkthrough
+    ├── .env.example          # Required env-var template
+    ├── README.md             # Server-specific setup walkthrough
+    └── agents/               # ── Multi-agent runtime, one folder per agent ──
+        ├── memory.py         # AgentMemory: bounded {task → summary} history + facts
+        ├── sub_agent.py      # Generic SubAgent class — own LLM loop, own memory
+        ├── llm.py            # Multi-turn Gemini wrapper + tool-schema sanitizer
+        ├── registry.py       # Partitions FastMCP tool list, builds the agent registry,
+        │                     # exposes run() — the public entry point
+        ├── runner.py         # Async generator that streams events as SSE
+        ├── main/              # Orchestrator
+        │   ├── prompt.py     # ORCHESTRATOR_SYSTEM_PROMPT
+        │   └── tools.py      # DELEGATE_TOOL schema + MAIN_DIRECT_TOOL_NAMES
+        ├── workspace/         # Google Workspace specialist
+        │   ├── prompt.py     # WORKSPACE_SYSTEM_PROMPT
+        │   └── tools.py      # WORKSPACE_TOOL_NAMES = {getUpcomingMeetings, searchGmail}
+        └── research/          # External-research specialist
+            ├── prompt.py     # RESEARCH_SYSTEM_PROMPT
+            └── tools.py      # RESEARCH_TOOL_NAMES = {analyzeAttendeeBackground, searchWebInfo}
 ```
 
 ## Tech stack
 
-- **Extension** — plain HTML/CSS/JavaScript, no framework, no build step. Manifest V3.
-- **MCP server** — Python 3.12, ES-module-equivalent (PEP 621 `[project]`), `mcp` (official Python SDK), `pydantic` v2, `starlette`, `uvicorn`, `httpx`, `google-api-python-client`, `google-auth-oauthlib`, `python-dotenv`. Managed by **[uv](https://docs.astral.sh/uv/)**; see [mcp-server/pyproject.toml](mcp-server/pyproject.toml).
+- **Extension** — plain HTML/CSS/JavaScript, no framework, no build step. Manifest V3. Two small JS files: `agent-client.js` (SSE reader) and `popup.js` (UI).
+- **Python service** — Python 3.12, PEP 621 `[project]`, `mcp` (official Python SDK), `pydantic` v2, `starlette`, `uvicorn`, `httpx`, `google-api-python-client`, `google-auth-oauthlib`, `python-dotenv`. Managed by **[uv](https://docs.astral.sh/uv/)**; see [mcp-server/pyproject.toml](mcp-server/pyproject.toml). Hosts both the MCP tool transport and the multi-agent runtime.
 - **LLM** — Gemini 2.5 Flash for the agent loop (extension) and for server-side reasoning (server). The same key works in both places.
 - **External APIs** — Google Calendar, Gmail, SerpAPI (Google SERP).
-- **Persistence** — `chrome.storage.local` (Gemini key for the agent), `~/.meeting-intel-mcp/google-tokens.json` (OAuth refresh token; format is intentionally compatible with the legacy Node server), `mcp-server/.env` (server-side API keys + config).
+- **Persistence** — `chrome.storage.local` (Gemini key for the agents), `~/.meeting-intel-mcp/google-tokens.json` (OAuth refresh token), `mcp-server/.env` (server-side API keys + config). Per-agent `AgentMemory` is in-process only and lives for the popup's lifetime.
 
 ## Limitations
 
