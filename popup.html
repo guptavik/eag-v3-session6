@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Meeting Intelligence Agent</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1>Meeting Intelligence Agent</h1>
+      <button class="gear-btn" id="gear-btn" type="button" aria-label="API key settings" aria-haspopup="true" aria-expanded="false">
+        <span class="gear-icon">⚙</span>
+        <span class="gear-status" id="gear-status" aria-hidden="true"></span>
+      </button>
+      <div id="api-key-section" class="settings-popover hidden" role="dialog" aria-label="Gemini API Key">
+        <h2>Gemini API Key</h2>
+        <div class="row">
+          <input
+            type="password"
+            id="api-key"
+            placeholder="AIza..."
+            autocomplete="off"
+            spellcheck="false">
+          <button id="save-key-btn" type="button">Save</button>
+        </div>
+        <div id="key-status" class="hint"></div>
+      </div>
+    </header>
+
+    <section class="query-section">
+      <label>What would you like help with?</label>
+      <div class="quick-actions">
+        <button class="quick-btn" data-query="Prepare me for my next meeting" type="button">
+          Prepare for next meeting
+        </button>
+        <button class="quick-btn" data-query="Show me all meetings today and research the attendees" type="button">
+          Show all meetings today
+        </button>
+        <button class="quick-btn" data-query="What's my meeting load this week?" type="button">
+          Calculate meeting stats
+        </button>
+      </div>
+      <div class="row">
+        <input
+          type="text"
+          id="custom-query"
+          placeholder="Or type a custom query..."
+          autocomplete="off">
+        <button id="run-btn" type="button">Go</button>
+      </div>
+    </section>
+
+    <section id="reasoning-section" class="reasoning-section hidden">
+      <div class="section-toggle" id="reasoning-toggle" role="button" tabindex="0">
+        <h2>Agent Reasoning Chain</h2>
+        <span class="section-meta" id="reasoning-meta"></span>
+        <button
+          class="copy-btn"
+          id="copy-btn"
+          type="button"
+          title="Copy reasoning chain + brief as markdown">Copy</button>
+        <span class="section-chevron">▾</span>
+      </div>
+      <div id="steps"></div>
+    </section>
+
+    <section id="brief-section" class="brief-section hidden">
+      <h2>Meeting Brief</h2>
+      <div id="brief" class="brief"></div>
+    </section>
+
+    <section id="error-section" class="error-section hidden">
+      <h2>Error</h2>
+      <div id="error" class="error"></div>
+    </section>
+  </div>
+
+  <script src="mcp-client.js"></script>
+  <script src="tools.js"></script>
+  <script src="api.js"></script>
+  <script src="agent.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

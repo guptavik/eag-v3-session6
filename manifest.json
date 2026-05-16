@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Meeting Intelligence Agent",
+  "version": "0.1.0",
+  "description": "Agentic AI assistant that prepares you for upcoming meetings.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://generativelanguage.googleapis.com/*",
+    "http://localhost:3737/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Meeting Intelligence Agent"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
