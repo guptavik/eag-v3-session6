@@ -1,9 +1,10 @@
-"""Gemini API wrapper for server-side reasoning calls.
+"""Single-shot JSON-mode Gemini wrapper for MCP tool handlers.
 
 Used by handlers that want LLM synthesis or "do you know this entity?"
-gating before paying SerpAPI quota. Narrower contract than the
-extension's api.js: structured JSON, low temperature, single turn,
-no tool calls.
+gating before paying SerpAPI quota (see tools.py — searchWebInfo and
+analyzeAttendeeBackground both depend on it). Narrower contract than
+the multi-turn agents/llm.py: structured JSON, low temperature, single
+turn, no tool calls.
 
 Either GEMINI_API_KEY or GOOGLE_API_KEY (the Google AI Studio default
 name) is accepted. Read at call time so dotenv has had a chance to

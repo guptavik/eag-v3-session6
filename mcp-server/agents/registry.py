@@ -40,8 +40,9 @@ from .workspace.tools import WORKSPACE_TOOL_NAMES
 ORCHESTRATOR_MAX_ITERATIONS = 10  # sub-agents inherit SUB_AGENT_MAX_ITERATIONS (6)
 
 # Set per-request at the top of run() so the in-process tool executor
-# can inject userTimeZone into every tool call's args, exactly as the
-# old mcp-client.js did on the wire.
+# can inject userTimeZone into every tool call's args — matching what
+# the @mcp.tool wrappers in server.py expect when called via the MCP
+# wire protocol.
 _user_tz_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "agents_user_tz", default=None
 )

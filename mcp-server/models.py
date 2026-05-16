@@ -21,11 +21,12 @@ from pydantic import BaseModel, ConfigDict, Field
 class CamelInputBase(BaseModel):
     """Base for tool-input models.
 
-    The Chrome extension's mcp-client.js auto-injects `userTimeZone` (camelCase)
-    into every tools/call invocation. The original Node server used Zod with
-    camelCase keys natively; this Python port keeps the wire format identical
-    by using Pydantic field aliases. The override below forces FastMCP's
-    schema generation to use those aliases (Pydantic v2's default is to emit
+    Tool callers (the in-process agents in agents/registry.py via mcp.call_tool,
+    or any external MCP client hitting /mcp) auto-inject `userTimeZone`
+    (camelCase) into every tool invocation, and the LLM emits the camelCase
+    parameter names directly. We keep the wire format camelCase by using
+    Pydantic field aliases. The override below forces FastMCP's schema
+    generation to use those aliases (Pydantic v2's default is to emit
     the Python field names, which would be snake_case and silently drop the
     auto-injected camelCase keys via `extra="ignore"`).
     """

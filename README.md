@@ -360,7 +360,6 @@ eag-v3-session6/
 ├── styles.css                # All styles, incl. per-agent (main/workspace/research)
 │                             # pill + left-border accents and reasoning-block tints
 ├── agent-client.js           # POST /agents/run + SSE reader; calls UI callbacks
-├── mockData.js               # Legacy mock fixtures (no longer wired into popup.html)
 ├── icons/                    # Extension icons
 ├── docs/
 │   └── prompt-evaluation.md  # Prompt Evaluation Assistant scoring (Session 5)

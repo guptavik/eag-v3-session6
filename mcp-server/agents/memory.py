@@ -1,7 +1,7 @@
-"""Per-agent memory store. Direct port of memory.js.
+"""Per-agent memory store.
 
 Each agent in the multi-agent system (orchestrator + workspace +
-research) owns one of these. It survives across run_agent() calls
+research) owns one of these. It survives across /agents/run requests
 within the server's lifetime — server restart clears it. This is
 the long-term scratchpad node from the architecture diagram.
 

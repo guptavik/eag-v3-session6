@@ -7,7 +7,8 @@ JSON-mode calls. This one:
   - Accepts tool declarations and returns the model's tool_use blocks.
   - Sanitizes JSON-Schema tool parameters to Gemini's OpenAPI subset
     ($schema, additionalProperties stripped; ["string","null"] →
-    "string" + nullable=true), same translation the old api.js did.
+    "string" + nullable=true) so FastMCP-generated schemas are
+    accepted by the Gemini function-declarations endpoint.
 
 Returns a small response object the SubAgent loop consumes:
     {
@@ -153,8 +154,8 @@ def _sanitize_schema_for_gemini(schema: Any) -> Any:
     """Gemini's parameters schema is an OpenAPI 3.0 subset, not full JSON
     Schema. Strip $schema / additionalProperties (Gemini 400s on them)
     and convert ["string","null"] nullable shorthand to "string" +
-    nullable: true. Same translation the old api.js sanitizeSchemaForGemini
-    did, kept verbatim here so behavior is identical."""
+    nullable: true. FastMCP's auto-generated tool schemas include both
+    of those JSON-Schema-only shapes, so we translate at this boundary."""
     if isinstance(schema, list):
         return [_sanitize_schema_for_gemini(item) for item in schema]
     if isinstance(schema, dict):

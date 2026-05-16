@@ -1,18 +1,20 @@
-"""HTTP entry point for the MCP server (Python rewrite).
+"""HTTP entry point for the meeting-intelligence service.
 
-Exposes the meeting-intelligence MCP server on POST /mcp via the MCP
-Python SDK's streamable-HTTP transport, plus a small set of custom
-routes for /health, /auth/google, and /oauth/google/callback.
+Hosts two surfaces on the same uvicorn process:
+  - POST /mcp        — streamable-HTTP MCP transport (5 tool definitions)
+  - POST /agents/run — multi-agent runtime, streams SSE events back
+                       (see agents/runner.py + agents/registry.py)
 
-Stateless mode: the SDK manages session lifecycle; we treat each request
-as independent — the extension's mcp-client.js handshakes once per popup
-load via the `initialize` JSON-RPC method.
+Plus a small set of utility routes for /health, /auth/google, and
+/oauth/google/callback.
 
-Tool argument names are camelCase (hoursAhead / endOfToday / …) to match
-the on-the-wire shape the extension and the LLM already use; FastMCP
-introspects the function signature to build the JSON schema the agent
-sees, so the parameter name IS the schema key. Internal validation and
-output shaping still goes through Pydantic v2 models in `models.py`.
+Stateless MCP mode: the SDK manages session lifecycle; we treat each
+request as independent.
+
+Tool argument names are camelCase (hoursAhead / endOfToday / …) so the
+LLM-emitted parameter names map directly to FastMCP's function-signature-
+derived schema. Internal validation and output shaping go through
+Pydantic v2 models in `models.py`.
 
 Run with:
     uv run python server.py
@@ -154,8 +156,9 @@ async def search_gmail_tool(
     ] = 5,
     userTimeZone: Annotated[str | None, Field(description="Auto-injected; ignored by this tool.")] = None,
 ) -> str:
-    # `userTimeZone` is accepted because mcp-client.js auto-injects it into every
-    # tool call. This tool doesn't consume it — declared only to satisfy the schema.
+    # `userTimeZone` is accepted because the agent runtime (agents/registry.py)
+    # auto-injects it into every tool call's args. This tool doesn't consume it
+    # — declared only to keep the schema uniform with the TZ-aware tools.
     del userTimeZone
     payload = await tools.search_gmail({"query": query, "maxResults": maxResults})
     return _wrap_text(payload)

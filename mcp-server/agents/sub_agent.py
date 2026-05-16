@@ -1,6 +1,7 @@
-"""Generic LLM-driven agent. Direct port of agents/shared/sub-agent.js
-adapted to asyncio + a structured event emitter (instead of JS callbacks)
-so the runner can stream events as SSE to the extension.
+"""Generic LLM-driven agent. Drives the same run loop for the
+orchestrator and both specialist sub-agents — only the system prompt,
+tool list, and (for the orchestrator) the in-process `delegate` handler
+differ between instances.
 
 Each instance owns:
     name             identifier used for routing + UI labelling
@@ -22,9 +23,9 @@ Each instance owns:
     4. push tool_results, repeat
     5. return the final text + record a brief summary into memory
 
-`emitter` is an async callable invoked at every step transition with a
-dict describing the event. The runner enqueues these onto an
-asyncio.Queue which it drains as SSE. Same event shape the JS UI used.
+`emitter` is an async callable invoked at every step transition with
+a dict describing the event. agents.runner enqueues these onto an
+asyncio.Queue which it drains and writes out as SSE frames.
 """
 
 from __future__ import annotations
@@ -76,8 +77,7 @@ async def _execute_with_retry(
     executor: ToolExecutor,
     on_retry: Callable[[str], Awaitable[None]] | None,
 ) -> dict[str, Any]:
-    """Try once; on failure invoke on_retry then try once more. Same
-    shape as executeWithRetry() in sub-agent.js. Returns:
+    """Try once; on failure invoke on_retry then try once more. Returns:
         {"ok": True,  "result": <...>, "retried": bool}
         {"ok": False, "error": str, "first_error": str, "retried": True}
     """
