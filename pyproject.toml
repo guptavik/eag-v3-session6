@@ -1,0 +1,24 @@
+[project]
+name = "eagv3-session6-agent"
+version = "0.1.0"
+description = "Four-layer cognitive agent (perception/memory/decision/action) for EAG v3 Session 6"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # MCP stdio transport + FastMCP tool decorators (used by mcp_server.py)
+    "mcp>=1.18",
+    # Validation on every layer boundary (per the assignment constraints)
+    "pydantic>=2.10",
+    # HTTP for the gateway client + the frankfurter currency call in mcp_server
+    "httpx>=0.28",
+    # Web search backends
+    "ddgs>=9.7",
+    "tavily-python>=0.6",
+    # Web fetcher
+    "crawl4ai>=0.7",
+    # .env loading (both server-side keys and the agent's gateway URL)
+    "python-dotenv>=1.0",
+]
+
+[tool.uv]
+package = false

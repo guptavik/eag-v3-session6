@@ -16,11 +16,19 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Python (the bulk of Python code lives in mcp-server/ which has its
-# own .gitignore covering .venv + caches; this catches stray bytecode
-# at the repo root if any tooling drops it.)
+# Python — uv venv + bytecode caches
+.venv/
 __pycache__/
 *.py[cod]
+
+# Agent6 runtime state — durable memory + artifacts + run traces.
+# Per the assignment: state/ must be cleanable between attempts, so it
+# stays out of version control. README documents `rm -rf state/`.
+state/
+
+# MCP server's file-tool sandbox + its usage log
+sandbox/
+usage.json
 
 # Node (no Node code in this project, but keep these excluded in case
 # any tooling drops them at the repo root during development)
