@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from contextlib import AsyncExitStack
@@ -73,10 +74,17 @@ class Action:
         if self._stack is not None:
             raise RuntimeError("Action.start() called twice")
         self._stack = AsyncExitStack()
+        # Force the child Python's stdout/stderr to UTF-8. crawl4ai's Rich
+        # logger writes box-drawing chars; without this the child crashes
+        # silently with UnicodeEncodeError on Windows (default cp1252) and
+        # the agent hangs waiting for a tool reply that will never come.
+        child_env = dict(os.environ)
+        child_env["PYTHONIOENCODING"] = "utf-8"
+        child_env.setdefault("PYTHONUTF8", "1")
         params = StdioServerParameters(
             command=sys.executable,
             args=[str(self._server_script)],
-            env=None,
+            env=child_env,
         )
         try:
             read, write = await self._stack.enter_async_context(stdio_client(params))

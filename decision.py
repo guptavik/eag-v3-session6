@@ -74,20 +74,19 @@ class Decision:
         "to satisfy the current goal. The answer must be the human-readable "
         "text for this goal (this goal only — later goals get their own turn).\n\n"
         "Hard rules:\n"
-        "1. Return JSON: {\"answer\": <string|null>, \"tool_call\": "
-        "{\"name\": <str>, \"arguments\": <obj>}|null}. "
-        "EXACTLY ONE of {answer, tool_call} is non-null. Returning both or "
-        "neither is a contract violation.\n"
-        "2. Do not invent tool names. Use only the names in the catalogue.\n"
-        "3. Do not paraphrase prior tool results in the answer when the goal "
-        "is just to fetch/search — emit `answer` only for synthesis goals.\n"
-        "4. If an artifact is ATTACHED below, read it and use its content "
-        "instead of calling fetch_url again.\n"
-        "5. Never fabricate facts. If you genuinely don't have the data, emit "
-        "a tool_call to get it.\n\n"
-        "Tag your reasoning before the JSON with a single line of the form "
-        "`[LOOKUP|SYNTHESIS|SCHEDULING|SEARCH|PROFILE] <one sentence>`. The "
-        "agent's tracer prints this — keep it terse."
+        "1. Output MUST be exactly one JSON object with two keys: `answer` and "
+        "`tool_call`. EXACTLY ONE of them is non-null; the other is null. "
+        "Emit nothing else — no prose, no markdown fences, no commentary.\n"
+        "2. Do not invent tool names. Use only the names listed in the "
+        "Tool catalogue section of the user message.\n"
+        "3. For goals shaped like \"fetch X\" or \"search for X\", emit a "
+        "tool_call. For goals shaped like \"extract / list / choose / "
+        "compare / answer\", emit an answer once the needed data is "
+        "present (either in memory hits or in the ATTACHED ARTIFACT).\n"
+        "4. If an artifact is ATTACHED below the prompt, read it and use "
+        "its content — DO NOT call fetch_url for the same URL again.\n"
+        "5. Never fabricate facts. If the data is genuinely missing, emit "
+        "a tool_call to get it."
     )
 
     # ------------------------------------------------------------------
@@ -117,15 +116,20 @@ class Decision:
             attached_text=attached_text,
             tool_catalogue=tool_catalogue,
         )
+        # NOTE: We intentionally do NOT pass response_format here. The
+        # gateway's schema-validation path is strict JSON Schema (rejects
+        # OpenAPI's "nullable" keyword), but the Gemini worker only
+        # accepts OpenAPI-style schemas (rejects JSON Schema union
+        # types like {"type": ["string", "null"]}). Going through
+        # response_format produces a 503 on either path depending on
+        # which form we send. Instead, we get plain text out and parse
+        # it ourselves; Pydantic's DecisionOutput validator still
+        # enforces the XOR contract downstream — no regex involved.
         resp = llm.chat(
             prompt=prompt,
             system=self.SYSTEM_PROMPT,
             auto_route="decision",
-            response_format={
-                "type": "json_schema",
-                "schema": _DECISION_SCHEMA,
-            },
-            temperature=0.2,
+            temperature=1.0,
             max_tokens=1200,
         )
         parsed = resp.get("parsed") or _json_from_text(resp.get("text", ""))
@@ -244,27 +248,27 @@ class Decision:
 # ---------------------------------------------------------------------------
 
 
+# Gemini's response_schema is OpenAPI 3.0, not JSON Schema. Three caveats:
+#   - No union types ({"type":["string","null"]}) — use nullable: true instead.
+#   - No anyOf / oneOf at the response_schema root — collapse to nullable object.
+#   - No additionalProperties.
+# The gateway's _sanitize_schema_for_gemini helps with simple cases but does
+# not transform anyOf, so we have to author the schema in OpenAPI-friendly form.
 _DECISION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "answer": {"type": ["string", "null"]},
+        "answer": {"type": "string", "nullable": True},
         "tool_call": {
-            "anyOf": [
-                {"type": "null"},
-                {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "arguments": {"type": "object"},
-                    },
-                    "required": ["name", "arguments"],
-                    "additionalProperties": False,
-                },
-            ]
+            "type": "object",
+            "nullable": True,
+            "properties": {
+                "name": {"type": "string"},
+                "arguments": {"type": "object"},
+            },
+            "required": ["name", "arguments"],
         },
     },
     "required": ["answer", "tool_call"],
-    "additionalProperties": False,
 }
 
 

@@ -15,14 +15,30 @@ File tools are sandboxed under ./sandbox/. Run:  python mcp_server.py
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
+# Force UTF-8 on stdout/stderr before any tool imports run. crawl4ai's
+# Rich logger writes box-drawing chars during fetch; on Windows the
+# default cp1252 codec raises UnicodeEncodeError mid-tool-call, which
+# the FastMCP wrapper swallows and turns into a silent hang. The agent
+# passes env=PYTHONIOENCODING=utf-8 too, but the MCP SDK's stdio_client
+# doesn't always honor that env — doing it here covers both cases.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
 import httpx
+from crawl4ai import AsyncWebCrawler  # import once at startup, not on every call
 from ddgs import DDGS
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
@@ -122,18 +138,20 @@ def _ddg_search(query: str, max_results: int) -> list[dict]:
     ]
 
 
-async def _crawl4ai_fetch(url: str) -> dict:
-    from crawl4ai import AsyncWebCrawler
-
+async def _crawl4ai_fetch(url: str, timeout: float = 60.0) -> dict:
     # crawl4ai uses Rich which writes via its own captured stdout reference, so
     # contextlib.redirect_stdout doesn't catch it. Redirect at the file-descriptor
     # level — crawl4ai's banner / [FETCH] / [SCRAPE] markers would otherwise
     # corrupt the MCP stdio JSON-RPC stream.
     saved_fd = os.dup(1)
     os.dup2(2, 1)
-    try:
+
+    async def _run() -> Any:
         async with AsyncWebCrawler(verbose=False) as crawler:
-            r = await crawler.arun(url=url)
+            return await crawler.arun(url=url)
+
+    try:
+        r = await asyncio.wait_for(_run(), timeout=timeout)
     finally:
         os.dup2(saved_fd, 1)
         os.close(saved_fd)
@@ -176,9 +194,9 @@ def web_search(query: str, max_results: int = 5) -> list[dict]:
 
 
 @mcp.tool()
-async def fetch_url(url: str, timeout: int = 20) -> dict:
+async def fetch_url(url: str, timeout: int = 60) -> dict:
     """Fetch clean markdown from a URL via crawl4ai (headless Chromium). Example: fetch_url("https://example.com")."""
-    return await _crawl4ai_fetch(url)
+    return await _crawl4ai_fetch(url, timeout=float(timeout))
 
 
 @mcp.tool()

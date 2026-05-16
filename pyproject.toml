@@ -18,6 +18,13 @@ dependencies = [
     "crawl4ai>=0.7",
     # .env loading (both server-side keys and the agent's gateway URL)
     "python-dotenv>=1.0",
+    # LLM Gateway V3 server deps — kept here so the gateway can run from
+    # this project's uv venv instead of needing its own .venv. The gateway's
+    # own run.sh still works as a fallback.
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "jsonschema>=4.21",
+    "tzdata>=2026.2",
 ]
 
 [tool.uv]

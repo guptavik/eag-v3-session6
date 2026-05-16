@@ -43,8 +43,20 @@ import json
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+# Trace lines use box-drawing chars (─, →, …) which the default Windows
+# console (cp1252) can't encode. Force UTF-8 on stdout/stderr before
+# anything else prints. line_buffering=True also makes the trace appear
+# in real time when stdout is piped (e.g. `... | tail` or to a file),
+# instead of buffering until the process exits and looking "stuck".
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 from dotenv import load_dotenv
 
@@ -291,6 +303,13 @@ async def _loop(
     history: list[ActionResult] = []
     last_actions_for_perception: list[ActionResult] = []
 
+    # Bail out if Decision raises this many times in a row. The agent
+    # cannot make progress without a working Decision call, and looping
+    # to the iteration cap on a deterministic failure (e.g. a malformed
+    # response_schema rejected by the worker) only wastes tokens.
+    consecutive_decision_errors = 0
+    MAX_CONSECUTIVE_DECISION_ERRORS = 3
+
     query_keywords = _keywords_from_text(user_query)
 
     for iteration in range(1, max_iterations + 1):
@@ -362,8 +381,14 @@ async def _loop(
         except Exception as exc:
             log.error("decision: %s", exc)
             tracer.record("decision", {"error": str(exc)}, goal_id=current_goal.id)
-            # Surface as a memory item so the next iteration sees the error,
-            # then continue — the model may recover with another goal.
+            consecutive_decision_errors += 1
+            if consecutive_decision_errors >= MAX_CONSECUTIVE_DECISION_ERRORS:
+                log.error(
+                    "decision: %d consecutive failures — bailing out",
+                    consecutive_decision_errors,
+                )
+                return observation, iteration, final_answer, "failed"
+            # Surface as a memory item so the next iteration sees the error.
             memory.add(
                 MemoryItem(
                     id=new_memory_id(),
@@ -382,6 +407,7 @@ async def _loop(
             last_actions_for_perception = []
             continue
 
+        consecutive_decision_errors = 0  # reset on a successful decision
         tracer.print_decision(decision_output)
         tracer.record("decision", decision_output, goal_id=current_goal.id)
 

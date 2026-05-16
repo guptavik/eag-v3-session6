@@ -236,15 +236,15 @@ class AgentMemory:
             f"User message:\n\"\"\"\n{user_query.strip()}\n\"\"\"\n\n"
             "Return only the JSON object."
         )
+        # response_format dropped — gateway's jsonschema validator and
+        # Gemini disagree on union types vs OpenAPI nullable. We parse
+        # the model's JSON text ourselves via _json_from_text below
+        # and validate each item through Pydantic.
         resp = llm.chat(
             prompt=prompt,
             system=self.REMEMBER_SYSTEM_PROMPT,
             auto_route="memory",
-            response_format={
-                "type": "json_schema",
-                "schema": _REMEMBER_SCHEMA,
-            },
-            temperature=0.0,
+            temperature=1.0,
             max_tokens=512,
         )
         parsed = resp.get("parsed") or _json_from_text(resp.get("text", ""))

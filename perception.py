@@ -169,15 +169,15 @@ class Perception:
     ) -> Observation:
         llm = self._ensure_llm()
         prompt = self._build_initial_prompt(user_query, memory_hits)
+        # response_format dropped intentionally: see decision.py for the
+        # gateway-vs-Gemini schema-translation gap. We parse the JSON
+        # in _json_from_text below and fall back to the user_query as
+        # a single goal on malformed output.
         resp = llm.chat(
             prompt=prompt,
             system=self.INITIAL_SYSTEM_PROMPT,
             auto_route="perception",
-            response_format={
-                "type": "json_schema",
-                "schema": _INITIAL_SCHEMA,
-            },
-            temperature=0.2,
+            temperature=1.0,
             max_tokens=512,
         )
         parsed = resp.get("parsed") or _json_from_text(resp.get("text", ""))
@@ -217,11 +217,7 @@ class Perception:
             prompt=prompt,
             system=self.REFRESH_SYSTEM_PROMPT,
             auto_route="perception",
-            response_format={
-                "type": "json_schema",
-                "schema": _REFRESH_SCHEMA,
-            },
-            temperature=0.0,
+            temperature=1.0,
             max_tokens=512,
         )
         parsed = resp.get("parsed") or _json_from_text(resp.get("text", ""))
