@@ -1,4 +1,4 @@
-# EAG v3 — Session 6: Four-Layer Cognitive Agent
+# EAG v3 — Session 6: Agentic Architecture - Four-Layer Cognitive Agent
 
 A tool-using agent built as four cooperating cognitive layers — **perception → memory → decision → action** — that:
 
