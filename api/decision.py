@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
 import _gateway_path  # noqa: F401  — side-effect: adds mcp-server/ to sys.path
@@ -86,7 +85,10 @@ class Decision:
         "4. If an artifact is ATTACHED below the prompt, read it and use "
         "its content — DO NOT call fetch_url for the same URL again.\n"
         "5. Never fabricate facts. If the data is genuinely missing, emit "
-        "a tool_call to get it."
+        "a tool_call to get it.\n"
+        "6. When the current goal text contains a fully-qualified URL "
+        "(https://… or http://…), prefer `fetch_url` over `web_search` — "
+        "the page is already named, there is nothing to search for."
     )
 
     # ------------------------------------------------------------------
@@ -243,11 +245,15 @@ def _json_from_text(text: str) -> dict[str, Any] | None:
     if not text:
         return None
     text = text.strip()
+    # Strip code fences using plain string ops (no regex on LLM output).
     if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n", "", text)
-        text = re.sub(r"\n```\s*$", "", text)
+        nl = text.find("\n")
+        text = text[nl + 1 :] if nl != -1 else text[3:]
+        text = text.rstrip()
+        if text.endswith("```"):
+            text = text[:-3].rstrip()
     # Some providers prepend a single tag line (e.g. "[LOOKUP] fetching …")
-    # before the JSON. Try to locate the first { and parse from there.
+    # before the JSON. Locate the first { and parse from there.
     brace = text.find("{")
     if brace > 0:
         text = text[brace:]

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
 import _gateway_path  # noqa: F401  — side-effect: adds mcp-server/ to sys.path
@@ -301,13 +300,18 @@ def _pick_latest_artifact(memory_hits: list[MemoryItem]) -> str | None:
 
 
 def _json_from_text(text: str) -> dict[str, Any] | None:
-    """Parse a model's text output as JSON, tolerating code fences."""
+    """Parse a model's text output as JSON, tolerating code fences.
+
+    Uses plain string operations only — no regex on LLM output."""
     if not text:
         return None
     text = text.strip()
     if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n", "", text)
-        text = re.sub(r"\n```\s*$", "", text)
+        nl = text.find("\n")
+        text = text[nl + 1 :] if nl != -1 else text[3:]
+        text = text.rstrip()
+        if text.endswith("```"):
+            text = text[:-3].rstrip()
     try:
         out = json.loads(text)
         return out if isinstance(out, dict) else None

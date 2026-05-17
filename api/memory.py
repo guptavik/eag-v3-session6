@@ -394,14 +394,22 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 def _json_from_text(text: str) -> dict[str, Any] | None:
     """Try to parse the model's text output as JSON. Used as a
     fallback when `resp["parsed"]` is empty (some providers don't
-    fill it when response_format isn't natively supported)."""
+    fill it when response_format isn't natively supported).
+
+    Plain string ops only — no regex on LLM output. The `re` import
+    at the top of this module is used on the *user's input message*
+    (interrogative prefix check + keyword tokenization), not on
+    anything coming back from the model."""
     if not text:
         return None
     text = text.strip()
-    # Strip code fences if present.
+    # Strip code fences with simple string operations.
     if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n", "", text)
-        text = re.sub(r"\n```\s*$", "", text)
+        nl = text.find("\n")
+        text = text[nl + 1 :] if nl != -1 else text[3:]
+        text = text.rstrip()
+        if text.endswith("```"):
+            text = text[:-3].rstrip()
     try:
         out = json.loads(text)
         return out if isinstance(out, dict) else None
