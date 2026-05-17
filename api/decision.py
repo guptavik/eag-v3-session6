@@ -72,29 +72,42 @@ class Decision:
         " (b) emit an `answer` — when the data you already have is enough "
         "to satisfy the current goal. The answer must be the human-readable "
         "text for this goal (this goal only — later goals get their own turn).\n\n"
-        "Hard rules:\n"
-        "1. Output MUST be exactly one JSON object with two keys: `answer` and "
-        "`tool_call`. EXACTLY ONE of them is non-null; the other is null. "
-        "Emit nothing else — no prose, no markdown fences, no commentary.\n"
+        "Hard rules (checked in order — rule 1 first, then 2, …):\n"
+        "1. Output MUST be exactly one JSON object with two top-level keys "
+        "and NO OTHER KEYS: `answer` and `tool_call`. EXACTLY ONE of them "
+        "is non-null; the other is null. Any extra key (e.g. `reasoning`, "
+        "`thought`, `notes`) is rejected by Pydantic with `extra=\"forbid\"` "
+        "— do not emit one. No prose, no markdown fences, no commentary "
+        "outside the JSON object.\n"
         "2. Do not invent tool names. Use only the names listed in the "
         "Tool catalogue section of the user message.\n"
-        "3. For goals shaped like \"fetch X\" or \"search for X\", emit a "
-        "tool_call. For goals shaped like \"extract / list / choose / "
-        "compare / answer\", emit an answer once the needed data is "
-        "present (either in memory hits or in the ATTACHED ARTIFACT).\n"
-        "4. If an artifact is ATTACHED below the prompt, read it and use "
-        "its content — DO NOT call fetch_url for the same URL again.\n"
-        "5. Never fabricate facts. If the data is genuinely missing, emit "
-        "a tool_call to get it.\n"
-        "6. When the current goal text contains a fully-qualified URL "
-        "(https://… or http://…), prefer `fetch_url` over `web_search` — "
+        "3. Persist goals take priority. When the goal text starts with "
+        "\"Create a file\", \"Save\", \"Record\", or otherwise asks to "
+        "persist data, emit a `create_file` tool_call. The `path` argument "
+        "MUST be relative and slash-separated (e.g. `reminders/<slug>.txt`, "
+        "`notes/<slug>.md`) — it is written under `api/sandbox/`; absolute "
+        "paths or paths with `..` will be rejected. Body should capture "
+        "the fact verbatim. Use `update_file` only if the same path appears "
+        "in memory hits or recent action results.\n"
+        "4. URL goals: when the current goal text contains a fully-qualified "
+        "URL (https://… or http://…), prefer `fetch_url` over `web_search` — "
         "the page is already named, there is nothing to search for.\n"
-        "7. When the goal text starts with \"Create a file\", \"Save\", "
-        "\"Record\", or otherwise asks to persist data, emit a "
-        "`create_file` tool_call with a sensible sandbox path "
-        "(reminders/<slug>.txt, notes/<slug>.md, etc.) and a body that "
-        "captures the fact. Use `update_file` only if the path already "
-        "exists in memory hits or recent action results."
+        "5. After rules 3-4 don't apply: for goals shaped like \"fetch X\" "
+        "or \"search for X\", emit a tool_call. For goals shaped like "
+        "\"extract / list / choose / compare / answer / confirm / "
+        "summarise\", emit an answer once the needed data is present "
+        "(either in memory hits or in the ATTACHED ARTIFACT). If memory "
+        "hits or ATTACHED already contain the answer, DO NOT call a tool "
+        "— emit the answer.\n"
+        "6. If an artifact is ATTACHED below the prompt, read it and use "
+        "its content — DO NOT call fetch_url for the same URL again. If "
+        "the ATTACHED block ends with `[truncated, original was N chars]` "
+        "and the data you need is plausibly past the truncation point, "
+        "emit an answer that states the gap honestly rather than "
+        "fabricating; do not re-fetch the same URL (the truncation will "
+        "repeat).\n"
+        "7. Never fabricate facts. If the data is genuinely missing and "
+        "no ATTACHED artifact covers it, emit a tool_call to get it."
     )
 
     # ------------------------------------------------------------------
@@ -137,7 +150,12 @@ class Decision:
             prompt=prompt,
             system=self.SYSTEM_PROMPT,
             auto_route="decision",
-            temperature=1.0,
+            # Lower than the gateway default — Decision emits a strict
+            # JSON object, not free-form prose, and at T=1.0 Gemini
+            # occasionally prepends a tag line like "[LOOKUP] fetching…"
+            # that _json_from_text has to strip. 0.3 keeps tool-choice
+            # variety while reducing structural noise.
+            temperature=0.3,
             max_tokens=1200,
         )
         parsed = resp.get("parsed") or _json_from_text(resp.get("text", ""))
