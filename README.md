@@ -85,6 +85,54 @@ Pydantic contracts (`MemoryItem`, `Artifact`, `Goal`, `Observation`, `ToolCall`,
 
 The Decision LLM call uses `auto_route="decision"` so the gateway selects the appropriate tier based on prompt size and complexity.
 
+### Per-iteration sequence
+
+```mermaid
+sequenceDiagram
+    participant L as agent6 loop
+    participant M as Memory
+    participant P as Perception
+    participant A as Artifacts
+    participant D as Decision
+    participant X as Action (MCP)
+
+    Note over L,M: pre-loop: one-shot durable-fact classification
+    L->>M: remember(query)
+    M-->>L: facts/preferences persisted to state/memory.json
+
+    loop until DecisionOutput.answer for last goal OR iter cap (16)
+        L->>M: read(query, history)
+        M-->>L: hits[] (handles + descriptors)
+
+        L->>P: observe(query, hits, history, prior_goals)
+        P-->>L: Observation(goals, attach?)
+
+        alt goal has attach_artifact_id
+            L->>A: get_bytes(art:...)
+            A-->>L: bytes (truncated at ATTACHED_MAX_CHARS=24_000)
+        end
+
+        L->>D: next_step(goal, hits, attached, history, tools)
+
+        alt Decision answers
+            D-->>L: answer (plain text)
+        else Decision picks a tool
+            D-->>L: tool_call
+            L->>X: execute(tool_call)
+            X-->>L: descriptor, artifact_id?
+            L->>M: record_outcome(tool_call, result, artifact_id)
+        else Pydantic XOR validator rejects
+            Note right of D: extra keys / both null / both set
+            L->>M: add scratchpad MemoryItem(error)
+            Note right of L: bail after 3 consecutive failures
+        end
+    end
+```
+
+Two pieces are easy to miss in the loop body and worth calling out:
+- The **pre-loop `remember(query)`** is what makes Query C2 work — the fact written here survives the process exit and powers the next run's `read()`.
+- The **Pydantic XOR rejection** is the third `alt` branch: when Decision emits extra keys, both fields null, or both set, the validator raises, the loop writes a `scratchpad` MemoryItem describing the failure, and the next iteration's Perception sees it. Query B in [Results](#results) exercises this path (iter 5 → iter 6 recovery).
+
 ---
 
 ## Setup
