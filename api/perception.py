@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date
 from typing import Any
 
 import _gateway_path  # noqa: F401  — side-effect: adds mcp-server/ to sys.path
@@ -44,6 +45,14 @@ log = logging.getLogger(__name__)
 # read prior artifacts and produce an answer. When the current open
 # goal matches and there's an artifact in memory hits, force-attach
 # kicks in. Order doesn't matter; matched case-insensitively.
+#
+# SYNC NOTE: REFRESH_SYSTEM_PROMPT rule 4 quotes a partial subset of
+# these words ("answer/choose/extract/list/compare/summarise") to tell
+# the model never to mark synthesis goals done from tool calls alone.
+# If you add a new synthesis verb here, consider mirroring it in that
+# refresh-prompt list as well — the two are intentionally aligned but
+# not generated from each other (the prompt's example shouldn't drift
+# into a wall of synonyms).
 SYNTHESIS_KEYWORDS = (
     "synthesise", "synthesize", "summarise", "summarize",
     "extract", "list",
@@ -74,28 +83,30 @@ class Perception:
         "Guidelines:\n"
         "1. Keep goal text short and imperative (\"Fetch the Wikipedia page for X\", "
         "\"Extract X from the fetched page\", \"Choose the best option given X\").\n"
-        "2. The LAST goal must be the one whose answer is shown to the user.\n"
-        "3. If a fact in memory already answers the query, emit a single "
-        "synthesis goal — do not request a tool call you don't need.\n"
-        "4. Do NOT decide which tool to use. Just describe what each goal needs.\n"
-        "5. Number of goals: 1 for simple queries, 2-4 for multi-step.\n"
-        "6. Bundling rule: when the user asks for several related pieces of "
-        "information in a single conjunctive sentence (\"X, Y, and Z\"), emit "
-        "ONE extraction goal that names all of them — not separate goals per "
-        "item. Example: \"Extract X, Y, and Z from the fetched page\" is one "
-        "goal, not three.\n"
-        "7. Persist-data rule: when the user asks to remember, save, record, "
-        "or 'give me a reminder' for a value, emit (a) one or more goals that "
-        "each start with \"Create a file at <path>\" so the Decision layer "
-        "dispatches create_file with concrete dates, AND (b) a final goal "
-        "like \"Confirm reminders have been saved and summarise what was "
-        "stored\" — because rule 2 still applies: the LAST goal must produce "
-        "the textual answer shown to the user, and a tool_call alone is "
-        "not an answer.\n"
-        "8. Date math: if the user gives a relative date phrase (\"two weeks "
-        "before\", \"the day after\", \"next Friday\"), resolve it to an "
-        "absolute YYYY-MM-DD in the goal text so downstream layers don't "
-        "have to reason about it again.\n\n"
+        "2. The LAST goal must be the one whose answer is shown to the user. "
+        "A tool_call alone is not an answer — if your last action is to call "
+        "a tool, add a final \"Confirm / summarise\" goal after it.\n"
+        "3. If a fact in memory already answers a pure read query, emit a "
+        "single synthesis goal — do not request a tool call you don't need. "
+        "BUT this never applies to persist requests (remember/save/record/"
+        "give me a reminder): even if the underlying fact is in memory, the "
+        "file the user asked for has not yet been created. Persist requests "
+        "always follow rule 6.\n"
+        "4. Do NOT name tools in goal text (Decision picks tools). Describe "
+        "the work: \"Fetch X\", \"Extract Y\", \"Create a file at Z\", etc.\n"
+        "5. Extraction bundling: when the user asks for several pieces of "
+        "INFORMATION in one conjunctive sentence (\"X, Y, and Z\"), emit ONE "
+        "extraction goal naming all of them. Applies only to read-only "
+        "extraction; persist actions follow rule 6.\n"
+        "6. Persist actions: when the user asks to remember, save, record, "
+        "or \"give me a reminder\", emit one goal of the form \"Create a "
+        "file at <path>\" per artefact to write (Decision will dispatch "
+        "create_file). Then emit a final \"Confirm and summarise what was "
+        "saved\" goal so rule 2 holds.\n"
+        "7. Date math: relative date phrases (\"two weeks before X\", \"next "
+        "Friday\") MUST be resolved to absolute YYYY-MM-DD in the goal text. "
+        "Use the \"Today is …\" line in the user message as the anchor for "
+        "any phrase relative to the current date.\n\n"
         "Return JSON: {\"goals\": [{\"text\": \"...\"}]}. "
         "Nothing else, no markdown, no commentary."
     )
@@ -257,7 +268,15 @@ class Perception:
     def _build_initial_prompt(
         self, user_query: str, memory_hits: list[MemoryItem]
     ) -> str:
-        parts = [f"User query:\n\"\"\"\n{user_query.strip()}\n\"\"\""]
+        # Anchor relative-date phrases ("two weeks before", "next Friday")
+        # to the actual current date instead of whatever date the model's
+        # training data settled on. Rule 7 in the system prompt explicitly
+        # references this line.
+        today_iso = date.today().isoformat()
+        parts = [
+            f"Today is {today_iso}.",
+            f"\nUser query:\n\"\"\"\n{user_query.strip()}\n\"\"\"",
+        ]
         if memory_hits:
             descs = "\n".join(f"- {h.kind}: {h.descriptor}" for h in memory_hits[:5])
             parts.append(f"\nRelevant prior memory (top {min(5, len(memory_hits))}):\n{descs}")
