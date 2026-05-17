@@ -78,7 +78,24 @@ class Perception:
         "3. If a fact in memory already answers the query, emit a single "
         "synthesis goal — do not request a tool call you don't need.\n"
         "4. Do NOT decide which tool to use. Just describe what each goal needs.\n"
-        "5. Number of goals: 1 for simple queries, 2-4 for multi-step.\n\n"
+        "5. Number of goals: 1 for simple queries, 2-4 for multi-step.\n"
+        "6. Bundling rule: when the user asks for several related pieces of "
+        "information in a single conjunctive sentence (\"X, Y, and Z\"), emit "
+        "ONE extraction goal that names all of them — not separate goals per "
+        "item. Example: \"Extract X, Y, and Z from the fetched page\" is one "
+        "goal, not three.\n"
+        "7. Persist-data rule: when the user asks to remember, save, record, "
+        "or 'give me a reminder' for a value, emit (a) one or more goals that "
+        "each start with \"Create a file at <path>\" so the Decision layer "
+        "dispatches create_file with concrete dates, AND (b) a final goal "
+        "like \"Confirm reminders have been saved and summarise what was "
+        "stored\" — because rule 2 still applies: the LAST goal must produce "
+        "the textual answer shown to the user, and a tool_call alone is "
+        "not an answer.\n"
+        "8. Date math: if the user gives a relative date phrase (\"two weeks "
+        "before\", \"the day after\", \"next Friday\"), resolve it to an "
+        "absolute YYYY-MM-DD in the goal text so downstream layers don't "
+        "have to reason about it again.\n\n"
         "Return JSON: {\"goals\": [{\"text\": \"...\"}]}. "
         "Nothing else, no markdown, no commentary."
     )
@@ -151,7 +168,7 @@ class Perception:
             return observation
         if not _is_synthesis_goal(first_open.text):
             return observation
-        artifact_id = _pick_latest_artifact(memory_hits)
+        artifact_id = _pick_latest_artifact(memory_hits, first_open.text)
         if artifact_id is None:
             return observation
         first_open.attach_artifact_id = artifact_id
@@ -289,10 +306,28 @@ def _is_synthesis_goal(text: str) -> bool:
     return any(kw in low for kw in SYNTHESIS_KEYWORDS)
 
 
-def _pick_latest_artifact(memory_hits: list[MemoryItem]) -> str | None:
-    """Among memory hits with an `artifact_id`, return the most-recently
-    created one's id. Returns None if no hit has an artifact."""
-    with_art = [h for h in memory_hits if h.artifact_id]
+def _pick_latest_artifact(
+    memory_hits: list[MemoryItem], goal_text: str
+) -> str | None:
+    """Among memory hits with an `artifact_id`, return the id of the
+    most-recently-created one **whose keywords overlap the goal's
+    keywords**. Without the overlap filter, force_attach pulls in
+    artifacts from prior unrelated runs (e.g. a Tokyo activities goal
+    would inherit a Wikipedia artifact left over from a Shannon run).
+
+    Returns None if no overlapping hit has an artifact."""
+    from memory import _keywords_from_text  # local: memory imports `re` heavily,
+    # and perception is the only caller of _pick_latest_artifact — keeping the
+    # import local avoids a module-load cycle if memory's surface ever changes.
+
+    goal_words = set(_keywords_from_text(goal_text))
+    if not goal_words:
+        return None
+    with_art = [
+        h
+        for h in memory_hits
+        if h.artifact_id and goal_words.intersection(h.keywords)
+    ]
     if not with_art:
         return None
     with_art.sort(key=lambda h: h.created_at, reverse=True)

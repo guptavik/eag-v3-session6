@@ -36,7 +36,9 @@ package = false
 # inserts the same path into sys.path before any agent module imports the
 # gateway.
 [tool.pyright]
-extraPaths = ["api/mcp-server"]
+# api/ is the source root for the cognitive layers; api/mcp-server/ is
+# the gateway source root (`from llm_gatewayV3.client import LLM`).
+extraPaths = ["api", "api/mcp-server"]
 
 [tool.ruff]
 src = ["api", "api/mcp-server"]

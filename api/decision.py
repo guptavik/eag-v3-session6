@@ -88,7 +88,13 @@ class Decision:
         "a tool_call to get it.\n"
         "6. When the current goal text contains a fully-qualified URL "
         "(https://… or http://…), prefer `fetch_url` over `web_search` — "
-        "the page is already named, there is nothing to search for."
+        "the page is already named, there is nothing to search for.\n"
+        "7. When the goal text starts with \"Create a file\", \"Save\", "
+        "\"Record\", or otherwise asks to persist data, emit a "
+        "`create_file` tool_call with a sensible sandbox path "
+        "(reminders/<slug>.txt, notes/<slug>.md, etc.) and a body that "
+        "captures the fact. Use `update_file` only if the path already "
+        "exists in memory hits or recent action results."
     )
 
     # ------------------------------------------------------------------
