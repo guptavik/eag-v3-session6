@@ -4,9 +4,14 @@
 .env.*
 !.env.example
 
-# Logs
+# Logs — generally ignored, but the canonical per-query traces under
+# logs/query-*.log are deliverables (README references them) so they
+# are explicitly un-ignored. Note the `logs/*` instead of `logs/`:
+# git won't descend into an ignored directory, so we have to ignore
+# the children individually and then negate the canonical traces.
 *.log
-logs/
+logs/*
+!logs/query-*.log
 
 # OS / editor noise
 .DS_Store
