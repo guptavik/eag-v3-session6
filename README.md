@@ -185,7 +185,23 @@ Return JSON: {"goals": [{"text": "..."}]}. Nothing else, no markdown,
 no commentary.
 ```
 
-The user-side message that follows this system prompt begins with `Today is YYYY-MM-DD.` (injected by `Perception._build_initial_prompt`) so rule 7 has a concrete anchor — without it the model would resolve "next Friday" against its training cutoff.
+The user-side message that follows this system prompt begins with `Today is YYYY-MM-DD.` (injected by `Perception._build_initial_prompt`) so rule 7 has a concrete anchor — without it the model would resolve "next Friday" against its training cutoff. Full envelope ([api/perception.py:268-284](api/perception.py#L268-L284)):
+
+```
+Today is <YYYY-MM-DD>.            ← anchor for rule 7
+
+User query:
+"""
+<verbatim user query>
+"""
+
+Relevant prior memory (top 5):     ← only when memory_hits non-empty
+- fact: <descriptor>
+- tool_outcome: <descriptor>
+- ...
+
+Return the JSON object.
+```
 
 **LLM contract vs. Pydantic `Goal`.** On iter 1 the model only emits `{"goals": [{"text": "..."}]}` — a thin sub-schema with one string field. The loop then stamps `id` (`goal:xxx`) and leaves `done=False` / `attach_artifact_id=null` at their defaults before Pydantic validates the full [`Goal`](#goal) model. The fuller schema below is the post-stamp wire shape, not what the LLM is asked to produce.
 
@@ -259,6 +275,42 @@ Hard rules (checked in order — rule 1 first, then 2, …):
    the same URL (the truncation will repeat).
 7. Never fabricate facts. If the data is genuinely missing and no
    ATTACHED artifact covers it, emit a tool_call to get it.
+```
+
+The user-side message that follows this system prompt has six clearly delimited sections so the model can see global state in one frame ([api/decision.py:168-242](api/decision.py#L168-L242)):
+
+```
+All goals:                              ← sticky-done + attach-marker view
+  1. [done] Fetch the Wikipedia page for Claude Shannon
+  2. [open] Extract birth date, death date, … (attach=art:9ffe…)
+  3. [open] Summarise …
+
+CURRENT GOAL (goal:<id>):               ← the one row you are deciding for
+  Extract birth date, death date, and three key contributions …
+
+Tool catalogue:                         ← live MCP listing, schema-truncated at 320 chars
+  - fetch_url: Fetch a URL and return its content as markdown.
+      schema: {"type": "object", "properties": {"url": …}}
+  - web_search: …
+  - create_file: …
+  - …
+
+Memory hits (N):                        ← descriptors only — payloads stay in artifact store
+  - tool_outcome: fetch_url → ok (artifact_id=art:9ffe12b52cac72dc)
+  - fact: …
+
+Action history (last 6):                ← HISTORY_TAIL
+  - fetch_url({"url":"https://en.wikipedia.org/wiki/Claude_Shannon"}) → ok artifact=art:9ffe…
+      result: {"status": 200, "length_bytes": 255130, …}
+
+ATTACHED ARTIFACT (art:9ffe…, 260981 chars):    ← only when current goal.attach_artifact_id set
+---
+<artifact bytes, truncated at ATTACHED_MAX_CHARS=24_000>
+…[truncated, original was 260981 chars]
+---
+
+Decide: return the JSON object now. Exactly one of answer | tool_call
+must be populated.
 ```
 
 **Prompt-shape limits (constants in [api/decision.py](api/decision.py)).** The Decision call uses `temperature=0.3` (lower than the gateway default — Decision emits strict JSON, not free-form prose). Three soft caps shape the user prompt: `HISTORY_TAIL = 6` (only the last 6 action results are shown — `tool_outcome` memories carry older context); tool-catalogue `input_schema` is truncated at 320 chars per tool to keep the prompt small (current 9-tool catalogue stays well under that); and `ATTACHED_MAX_CHARS = 24_000` caps the attached-artifact slice (rule 6 covers the truncation case).
@@ -358,6 +410,41 @@ def either_answer_or_tool(self) -> DecisionOutput:
         raise ValueError("DecisionOutput requires exactly one of {answer, tool_call}")
     return self
 ```
+
+**Where Decision's prompt rules map to schema enforcement.** A rule is *hard* when the schema or validator catches violations and the loop retries; *soft* when the rule is guidance only and a slip costs an iter or a degraded answer but no crash.
+
+| Prompt rule | Schema field / validator | Enforcement |
+|---|---|---|
+| Rule 1 — "two top-level keys, NO OTHER KEYS" | `ConfigDict(extra="forbid")` on `DecisionOutput` | **Hard**: extra keys raise `ValidationError` → loop retries via scratchpad memory |
+| Rule 1 — "EXACTLY ONE non-null" | `@model_validator either_answer_or_tool` | **Hard**: both-set or both-null raises `ValueError` → same retry path |
+| Rule 1 — "no prose, no markdown fences" | `_json_from_text` in [api/decision.py:250-270](api/decision.py#L250-L270) | **Soft**: defence-in-depth — strips code fences and finds first `{`. No regex. |
+| Rule 2 — "Do not invent tool names" | MCP server rejects unknown tools on dispatch ([api/action.py](api/action.py)) | **Hard but downstream**: a bad name burns one iter on tool-not-found |
+| Rule 3 — `create_file` with relative path | MCP server rejects absolute/`..` paths | **Hard but downstream** |
+| Rule 4 — URL goal → `fetch_url` | none in schema | **Soft**: violation just costs an iter via web_search detour |
+| Rule 5 — synthesis-shaped goal → `answer` | none in schema | **Soft** |
+| Rule 6 — ATTACHED truncation fallback | none in schema | **Soft**: trust-based; the cost is correctness, not crash |
+| Rule 7 — never fabricate | none in schema | **Soft** |
+
+**What happens when Pydantic rejects.** [api/agent6.py:381-408](api/agent6.py#L381-L408) catches the `ValidationError` and turns it into a `scratchpad` memory item that the next iteration's Perception sees, so the model gets told why it failed and re-decides:
+
+```python
+try:
+    decision_output = decision.next(...)
+except Exception as exc:
+    log.error("decision: %s", exc)
+    consecutive_decision_errors += 1
+    if consecutive_decision_errors >= MAX_CONSECUTIVE_DECISION_ERRORS:
+        return observation, iteration, final_answer, "failed"
+    memory.add(MemoryItem(
+        kind="scratchpad",
+        descriptor=f"decision error on {current_goal.text!r}: {exc}",
+        value={"error": str(exc)},
+        ...
+    ))
+    continue
+```
+
+Each ValidationError costs one iter. Three consecutive failures bail the run. In practice we've never seen more than one in a row — Query B in [Results](#results) had exactly one (an `answer=None, tool_call=None` glitch) and iter 6 recovered cleanly. This retry loop is why the agent is regex-free: the schema **is** the gate, the model is told when it fails, and the dispatch path never has to parse free-form prose.
 
 ### MemoryItem (durable memory unit)
 
