@@ -30,13 +30,13 @@ dependencies = [
 [tool.uv]
 package = false
 
-# The LLM Gateway lives at mcp-server/llm_gatewayV3/. Static analyzers
+# The LLM Gateway lives at api/mcp-server/llm_gatewayV3/. Static analyzers
 # need to know about that extra source root to resolve imports of the
-# form `from llm_gatewayV3.client import LLM`. At runtime, _gateway_path.py
+# form `from llm_gatewayV3.client import LLM`. At runtime, api/_gateway_path.py
 # inserts the same path into sys.path before any agent module imports the
 # gateway.
 [tool.pyright]
-extraPaths = ["mcp-server"]
+extraPaths = ["api/mcp-server"]
 
 [tool.ruff]
-src = [".", "mcp-server"]
+src = ["api", "api/mcp-server"]

@@ -317,29 +317,6 @@ class AgentMemory:
 # ---------------------------------------------------------------------------
 
 
-_REMEMBER_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string", "enum": ["fact", "preference"]},
-                    "keywords": {"type": "array", "items": {"type": "string"}},
-                    "descriptor": {"type": "string"},
-                    "value": {"type": "object"},
-                },
-                "required": ["kind", "keywords", "descriptor"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["items"],
-    "additionalProperties": False,
-}
-
-
 _INTERROGATIVE_PREFIX = re.compile(
     r"^\s*(what|when|where|why|who|how|which|tell me|show me|find|search|"
     r"give me|list|fetch|read|convert|compute)\b",

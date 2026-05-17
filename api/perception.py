@@ -300,46 +300,6 @@ def _pick_latest_artifact(memory_hits: list[MemoryItem]) -> str | None:
     return with_art[0].artifact_id
 
 
-_INITIAL_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "goals": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["goals"],
-    "additionalProperties": False,
-}
-
-
-_REFRESH_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "goals": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string"},
-                    "text": {"type": "string"},
-                    "done": {"type": "boolean"},
-                },
-                "required": ["id", "text", "done"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["goals"],
-    "additionalProperties": False,
-}
-
-
 def _json_from_text(text: str) -> dict[str, Any] | None:
     """Parse a model's text output as JSON, tolerating code fences."""
     if not text:

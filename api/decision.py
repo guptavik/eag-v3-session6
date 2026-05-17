@@ -239,39 +239,6 @@ class Decision:
         return self._llm
 
 
-# ---------------------------------------------------------------------------
-# JSON Schema for DecisionOutput's wire format. Differs from the
-# Pydantic-derived schema in two ways: (1) we use anyOf-style nullability
-# rather than "type": ["string","null"] because Gemini handles it more
-# reliably; (2) `arguments` is constrained to "object" so providers
-# don't return a string by mistake.
-# ---------------------------------------------------------------------------
-
-
-# Gemini's response_schema is OpenAPI 3.0, not JSON Schema. Three caveats:
-#   - No union types ({"type":["string","null"]}) — use nullable: true instead.
-#   - No anyOf / oneOf at the response_schema root — collapse to nullable object.
-#   - No additionalProperties.
-# The gateway's _sanitize_schema_for_gemini helps with simple cases but does
-# not transform anyOf, so we have to author the schema in OpenAPI-friendly form.
-_DECISION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "answer": {"type": "string", "nullable": True},
-        "tool_call": {
-            "type": "object",
-            "nullable": True,
-            "properties": {
-                "name": {"type": "string"},
-                "arguments": {"type": "object"},
-            },
-            "required": ["name", "arguments"],
-        },
-    },
-    "required": ["answer", "tool_call"],
-}
-
-
 def _json_from_text(text: str) -> dict[str, Any] | None:
     if not text:
         return None
