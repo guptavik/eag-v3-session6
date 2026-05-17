@@ -30,20 +30,14 @@ All four target queries pass within the assignment's 2× iteration cap. See [Res
 │   ├── .env.example                     agent env template (TAVILY_API_KEY, gateway URL)
 │   ├── state/                           durable memory + artifacts; gitignored; wipeable
 │   ├── sandbox/                         mcp_server's file-tool sandbox; gitignored
-│   ├── mcp-server/
-│   │   └── llm_gatewayV3/               FastAPI service on :8101 — every LLM call goes here
-│   └── mcp-server-meeting-intel/        PARKED prior Session-5/6 meeting-intel server
-│
-├── ui/
-│   └── extension-meeting-intel/         PARKED prior Chrome extension UI
+│   └── mcp-server/
+│       └── llm_gatewayV3/               FastAPI service on :8101 — every LLM call goes here
 │
 ├── PLAN.md                              implementation plan (kept for reference)
 ├── pyproject.toml                       uv-managed deps; lives at repo root
 ├── logs/                                per-query traces (query-a.log, query-b.log, ...)
 └── README.md                            this file
 ```
-
-The `*-meeting-intel/` folders preserve earlier work and aren't part of this assignment.
 
 ---
 
